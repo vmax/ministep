@@ -1,0 +1,258 @@
+"""Small Textual surface; it observes state and never owns timing or MIDI I/O."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from textual.app import App, ComposeResult
+from textual.containers import VerticalScroll
+from textual.widgets import Footer, Header, Static
+
+from .controller import Command, CommandName
+from .runtime import MiniStepRuntime
+from .state import Step, note_name
+
+DEFAULT_SEQUENCE_PATH = Path.home() / ".config" / "ministep" / "sequence.json"
+LEARNABLE_COMMANDS = (
+    CommandName.COMMIT,
+    CommandName.REST,
+    CommandName.HOLD,
+    CommandName.UNDO,
+    CommandName.CLEAR,
+    CommandName.PLAY_STOP,
+    CommandName.RESTART,
+    CommandName.RECORD_TOGGLE,
+    CommandName.ARM_ROOT_CAPTURE,
+    CommandName.STEP_DIVISION_UP,
+    CommandName.STEP_DIVISION_DOWN,
+    CommandName.SET_BPM,
+    CommandName.SET_GATE,
+    CommandName.SET_TRANSPOSE,
+    CommandName.SET_OCTAVE,
+)
+
+
+class MiniStepApp(App[None]):
+    CSS = """
+    Screen { layout: vertical; }
+    #summary { height: 6; padding: 0 1; }
+    #sequence { height: 1fr; padding: 0 1; }
+    #status { height: 2; padding: 0 1; color: $text-muted; }
+    .playing { color: $success; }
+    """
+    BINDINGS = [
+        ("space", "toggle", "Play/stop"),
+        ("enter", "commit", "Commit"),
+        ("h", "hold", "Hold"),
+        ("m", "record_toggle", "Record"),
+        ("k", "midi_learn", "MIDI Learn"),
+        ("t", "arm_root", "Set root"),
+        ("comma", "bpm_down", "BPM -"),
+        ("full_stop", "bpm_up", "BPM +"),
+        ("pageup", "division_up", "Division +"),
+        ("pagedown", "division_down", "Division -"),
+        ("r", "rest", "Rest"),
+        ("u", "undo", "Undo"),
+        ("backspace", "undo", "Undo"),
+        ("c", "clear", "Clear"),
+        ("home", "restart", "Restart"),
+        ("s", "save", "Save"),
+        ("l", "load", "Load"),
+        ("q", "quit", "Quit"),
+    ]
+
+    def __init__(
+        self, runtime: MiniStepRuntime, sequence_path: Path = DEFAULT_SEQUENCE_PATH
+    ) -> None:
+        super().__init__()
+        self.runtime = runtime
+        self.sequence_path = sequence_path
+        self._learn_selection: int | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=False)
+        with VerticalScroll():
+            yield Static(id="summary")
+            yield Static(id="sequence")
+            yield Static(id="status")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.set_interval(0.05, self.refresh_view)
+        self.refresh_view()
+
+    def refresh_view(self) -> None:
+        state = self.runtime.state
+        last = "--" if state.last_note_played is None else note_name(state.last_note_played[0])
+        last_velocity = "--" if state.last_note_played is None else str(state.last_note_played[1])
+        held = ", ".join(note_name(note) for note in sorted(state.held_notes)) or "--"
+        status = "[class=playing]PLAYING[/]" if state.playing else "STOPPED"
+        record = "[bold red]REC ●[/]" if state.recording else "REC"
+        source_root = state.sequence_root()
+        root = (
+            "--"
+            if source_root is None
+            else note_name(min(127, max(0, source_root + state.transpose)))
+        )
+        root_status = (
+            "[bold yellow]ROOT? Play MIDI note[/]" if state.root_capture_armed else f"ROOT: {root}"
+        )
+        loop = "FULL" if state.loop_length is None else str(state.loop_length)
+        self.query_one("#summary", Static).update(
+            f"MIDI IN: {state.selected_input or 'not selected'}\n"
+            f"MIDI OUT: {state.selected_output or 'not selected'}\n"
+            f"BPM {state.bpm:g}  |  1/{state.step_division}  |  gate {state.default_gate:.2f}  "
+            f"|  transpose {state.transpose:+d}  |  octave {state.octave:+d}  |  loop {loop}\n"
+            f"{record}  |  {root_status}  |  {status}\n"
+            f"[bold]AUDITION: {last}[/]  |  velocity {last_velocity}  |  Held: {held}  "
+            f"|  Steps: {len(state.sequence)}"
+        )
+        self.query_one("#sequence", Static).update(self._sequence_grid())
+        learning = (
+            f"MIDI LEARN: ←/→ {LEARNABLE_COMMANDS[self._learn_selection].name}; "
+            "Enter: arm CC/pad; Esc: cancel"
+            if self._learn_selection is not None
+            else state.status_message
+        )
+        self.query_one("#status", Static).update(
+            f"{learning}\n"
+            "←/→: select  •  ↑/↓: semitone  •  Shift+↑/↓: octave  •  H: hold  "
+            "•  T: set root  •  ,/.: BPM  •  PgUp/PgDn: division  •  K: MIDI Learn"
+        )
+
+    def _sequence_grid(self) -> str:
+        steps = self.runtime.state.sequence
+        if not steps:
+            return "Sequence is empty. Play a note, listen, then press Enter (or your COMMIT pad)."
+        cell_width = 7
+        # Keep KeyStep-style numbered cells aligned without wrapping within a
+        # narrow terminal; render up to the requested 16 cells when space permits.
+        steps_per_row = max(4, min(16, (self.size.width - 2) // cell_width))
+        lines: list[str] = []
+        for start in range(0, len(steps), steps_per_row):
+            chunk = steps[start : start + steps_per_row]
+            numbers = "".join(f"{start + index + 1:^{cell_width}}" for index in range(len(chunk)))
+            values = "".join(
+                self._render_step(step, start + index) for index, step in enumerate(chunk)
+            )
+            lines.extend((numbers, values, ""))
+        return "\n".join(lines)
+
+    def _render_step(self, step: Step, index: int) -> str:
+        value = "--" if step.note is None else note_name(step.note)
+        if not step.enabled:
+            value = f"({value})"
+        if step.tie:
+            value = f"{value}~"
+        value = value[:4]
+        cursor = "▶" if index == self.runtime.state.cursor else " "
+        playing = (
+            "●" if self.runtime.state.playing and index == self.runtime.state.playhead else " "
+        )
+        cell = f" {cursor}{playing}{value:<4}"
+        if playing == "●":
+            return f"[bold black on green]{cell}[/]"
+        if cursor == "▶":
+            return f"[bold yellow]{cell}[/]"
+        return cell
+
+    async def action_toggle(self) -> None:
+        await self.runtime.toggle_play()
+
+    async def action_commit(self) -> None:
+        if self._learn_selection is not None:
+            target = LEARNABLE_COMMANDS[self._learn_selection]
+            self._learn_selection = None
+            self.runtime.arm_midi_learn(target)
+            return
+        await self.runtime.execute(Command(CommandName.COMMIT))
+
+    async def action_hold(self) -> None:
+        await self.runtime.execute(Command(CommandName.HOLD))
+
+    async def action_record_toggle(self) -> None:
+        await self.runtime.execute(Command(CommandName.RECORD_TOGGLE))
+
+    async def action_midi_learn(self) -> None:
+        if self.runtime.mapping is None:
+            self.runtime.state.status_message = "Restart with --mapping minilab3 to use MIDI Learn."
+            return
+        self._learn_selection = 0
+
+    async def action_bpm_down(self) -> None:
+        await self.runtime.execute(Command(CommandName.BPM_DOWN))
+
+    async def action_bpm_up(self) -> None:
+        await self.runtime.execute(Command(CommandName.BPM_UP))
+
+    async def action_division_up(self) -> None:
+        await self.runtime.execute(Command(CommandName.STEP_DIVISION_UP))
+
+    async def action_division_down(self) -> None:
+        await self.runtime.execute(Command(CommandName.STEP_DIVISION_DOWN))
+
+    async def action_arm_root(self) -> None:
+        await self.runtime.execute(Command(CommandName.ARM_ROOT_CAPTURE))
+
+    async def action_rest(self) -> None:
+        await self.runtime.execute(Command(CommandName.REST))
+
+    async def action_undo(self) -> None:
+        await self.runtime.execute(Command(CommandName.UNDO))
+
+    async def action_clear(self) -> None:
+        await self.runtime.execute(Command(CommandName.CLEAR))
+
+    async def action_restart(self) -> None:
+        await self.runtime.restart()
+
+    async def action_save(self) -> None:
+        try:
+            await self.runtime.save(self.sequence_path)
+        except OSError as error:
+            self.runtime.state.status_message = f"Save failed: {error}"
+
+    async def action_load(self) -> None:
+        try:
+            await self.runtime.load(self.sequence_path)
+        except (OSError, ValueError) as error:
+            self.runtime.state.status_message = f"Load failed: {error}"
+
+    async def action_quit(self) -> None:
+        await self.runtime.shutdown()
+        self.exit()
+
+    async def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        key = event.key
+        if self._learn_selection is not None:
+            if key in ("left", "up"):
+                self._learn_selection = (self._learn_selection - 1) % len(LEARNABLE_COMMANDS)
+            elif key in ("right", "down"):
+                self._learn_selection = (self._learn_selection + 1) % len(LEARNABLE_COMMANDS)
+            elif key == "escape":
+                self._learn_selection = None
+                self.runtime.state.status_message = "MIDI Learn cancelled."
+            else:
+                return
+            event.stop()
+            return
+        if key == "left":
+            self.runtime.state.move_cursor(-1)
+        elif key == "right":
+            self.runtime.state.move_cursor(1)
+        elif key in ("up", "down", "shift+up", "shift+down"):
+            delta = 12 if key.startswith("shift+") else 1
+            if key.endswith("down"):
+                delta *= -1
+            self.runtime.state.adjust_cursor_note(delta)
+        elif key in ("[", "left_square_bracket"):
+            self.runtime.state.set_default_gate(self.runtime.state.default_gate - 0.05)
+        elif key in ("]", "right_square_bracket"):
+            self.runtime.state.set_default_gate(self.runtime.state.default_gate + 0.05)
+        elif key == "e":
+            self.runtime.state.replace_cursor_with_last_note()
+        elif key in ("x", "delete"):
+            self.runtime.state.delete_cursor()
+        else:
+            return
+        event.stop()

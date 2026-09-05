@@ -1,0 +1,29 @@
+# Send this profile to the IAC bus that Miniverse listens to. In Miniverse,
+# use its MIDI Learn UI to assign the listed outgoing CCs to matching params.
+name: Miniverse
+output: MiniStep
+channel: 1
+
+pages:
+  CONTROLLERS:
+    knobs: {}
+
+  OSCILLATOR BANK:
+    knobs:
+      1: { cc: 16, label: OSC2 FREQUENCY }
+
+  MIXER:
+    knobs:
+      1: { cc: 82, label: OSC1 VOLUME }
+      2: { cc: 83, label: OSC2 VOLUME }
+      3: { cc: 85, label: OSC3 VOLUME }
+
+  MODIFIERS:
+    knobs:
+      1: { cc: 20, label: CUTOFF }
+      2: { cc: 21, label: EMPHASIS }
+      3: { cc: 22, label: CONTOUR }
+      4: { cc: 93, label: FILTER ATTACK }
+
+  OUTPUT:
+    knobs: {}
