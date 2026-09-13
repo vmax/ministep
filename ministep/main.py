@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gc
 import sys
 from contextlib import suppress
 from pathlib import Path
@@ -42,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--control-output",
         help="MIDI output for profile CCs; overrides the profile's output field",
+    )
+    parser.add_argument(
+        "--timing-log",
+        type=Path,
+        help="Append a transport timing summary to this file each time playback stops",
     )
     return parser
 
@@ -89,6 +95,21 @@ def display_command(command: Command) -> tuple[str, str | None]:
     if command.name == CommandName.SET_GATE:
         return label, f"{float(command.value):.2f}"
     return label, str(command.value)
+
+
+def tune_gc_for_playback() -> None:
+    """Keep collector pauses off the transport path.
+
+    The TUI allocates enough for a full (gen2) collection every ~10 s, and each
+    one pauses the shared asyncio thread for up to ~15 ms (measured, see
+    docs/TIMING.md). Freezing the objects that exist after start-up keeps them
+    out of every later collection, and a higher gen2 threshold makes full
+    collections rare. Playback correctness never depends on this.
+    """
+    gc.collect()
+    gc.freeze()
+    threshold0, threshold1, _ = gc.get_threshold()
+    gc.set_threshold(threshold0, threshold1, 100)
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -178,6 +199,7 @@ async def run(args: argparse.Namespace) -> int:
             mapping,
             DEFAULT_MIDI_MAPPING_PATH,
             control_pages=profile.page_names if profile is not None else (),
+            timing_log=args.timing_log,
         )
         if selected_input:
             manager.open_input(selected_input)
@@ -212,6 +234,7 @@ async def run(args: argparse.Namespace) -> int:
 
             display_task = asyncio.create_task(refresh_display())
         app = MiniStepApp(runtime, DEFAULT_SEQUENCE_PATH)
+        tune_gc_for_playback()
         await app.run_async()
     except KeyboardInterrupt:
         pass

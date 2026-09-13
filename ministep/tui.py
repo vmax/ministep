@@ -68,6 +68,7 @@ class MiniStepApp(App[None]):
         self.runtime = runtime
         self.sequence_path = sequence_path
         self._learn_selection: int | None = None
+        self._rendered: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -80,6 +81,18 @@ class MiniStepApp(App[None]):
     def on_mount(self) -> None:
         self.set_interval(0.05, self.refresh_view)
         self.refresh_view()
+
+    def _update(self, widget_id: str, text: str) -> None:
+        """Push text to a Static only when it changed.
+
+        Every ``Static.update`` schedules a Textual layout/render pass on the shared
+        asyncio loop, which can delay a sequencer wake-up by several milliseconds.
+        Skipping unchanged widgets keeps the UI's share of the loop minimal.
+        """
+        if self._rendered.get(widget_id) == text:
+            return
+        self._rendered[widget_id] = text
+        self.query_one(f"#{widget_id}", Static).update(text)
 
     def refresh_view(self) -> None:
         state = self.runtime.state
@@ -98,26 +111,28 @@ class MiniStepApp(App[None]):
             "[bold yellow]ROOT? Play MIDI note[/]" if state.root_capture_armed else f"ROOT: {root}"
         )
         loop = "FULL" if state.loop_length is None else str(state.loop_length)
-        self.query_one("#summary", Static).update(
+        self._update(
+            "summary",
             f"MIDI IN: {state.selected_input or 'not selected'}\n"
             f"MIDI OUT: {state.selected_output or 'not selected'}\n"
             f"BPM {state.bpm:g}  |  1/{state.step_division}  |  gate {state.default_gate:.2f}  "
             f"|  transpose {state.transpose:+d}  |  octave {state.octave:+d}  |  loop {loop}\n"
             f"{record}  |  {root_status}  |  {status}\n"
             f"[bold]AUDITION: {last}[/]  |  velocity {last_velocity}  |  Held: {held}  "
-            f"|  Steps: {len(state.sequence)}"
+            f"|  Steps: {len(state.sequence)}",
         )
-        self.query_one("#sequence", Static).update(self._sequence_grid())
+        self._update("sequence", self._sequence_grid())
         learning = (
             f"MIDI LEARN: ←/→ {LEARNABLE_COMMANDS[self._learn_selection].name}; "
             "Enter: arm CC/pad; Esc: cancel"
             if self._learn_selection is not None
             else state.status_message
         )
-        self.query_one("#status", Static).update(
+        self._update(
+            "status",
             f"{learning}\n"
             "←/→: select  •  ↑/↓: semitone  •  Shift+↑/↓: octave  •  H: hold  "
-            "•  T: set root  •  ,/.: BPM  •  PgUp/PgDn: division  •  K: MIDI Learn"
+            "•  T: set root  •  ,/.: BPM  •  PgUp/PgDn: division  •  K: MIDI Learn",
         )
 
     def _sequence_grid(self) -> str:

@@ -44,7 +44,7 @@ MIDI keyboard / MiniLab 3
 - **Audition, then commit.** Incoming notes are immediately forwarded to the selected MIDI output so you can hear them. `COMMIT` appends the last auditioned note as the next step, preserving its velocity.
 - **REC step mode.** Toggle REC and each physical Note On commits one step automatically. Note Off events do not create steps; REC never captures performance timing or starts transport.
 - **Sequencing tools.** Add rests, ties/holds, undo the final step, clear, restart, edit a selected step, transpose live, or set a new pitch-class root.
-- **Clocked playback.** Internal monotonic timing plays the sequence at a selectable BPM, 1/4, 1/8, 1/16, or 1/32 division, with a global gate.
+- **Clocked playback.** Internal monotonic timing on an anchored grid plays the sequence at a selectable BPM, 1/4, 1/8, 1/16, or 1/32 division, with a global gate. Late wake-ups never shift the transport; see `docs/TIMING.md`. Pass `--timing-log PATH` to append timing summaries whenever playback stops.
 - **Non-destructive loop spans.** Choose `FULL → 8 → 16 → 32 → 64`; selecting `16`, for example, loops the first 16 stored steps without truncating later ones.
 - **Persistence.** Load JSON at startup and save/load the default sequence from the TUI.
 - **MIDI-safe pass-through.** Notes from live input and sequencer playback are ownership-tracked, so one source's Note Off does not cut off the other source's same-pitch note.

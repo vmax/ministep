@@ -10,6 +10,7 @@ from .controller import ABSOLUTE_CC_RANGES, Command, CommandName, SimpleMapping
 from .midi import OwnedMidiOutput
 from .sequencer import Sequencer
 from .state import LOOP_LENGTHS, PLAYBACK_DIVISIONS, AppState
+from .timing import TimingStats
 
 BASE_MENU_ITEMS = ("BPM", "GATE", "DIVISION", "TRANSPOSE", "LOOP LENGTH")
 _MAIN_ENCODER_TURNS = frozenset((28, 114))
@@ -36,13 +37,17 @@ class MiniStepRuntime:
         mapping: SimpleMapping | None = None,
         mapping_path: Path | None = None,
         control_pages: tuple[str, ...] = (),
+        timing_log: Path | None = None,
     ) -> None:
         self.state = state
         self.output = output
         self.mapping = mapping
         self.mapping_path = mapping_path
         self.midi_learn_target: CommandName | None = None
-        self.sequencer = Sequencer(state, output) if output is not None else None
+        # Optional transport diagnostics: summarised to a file whenever playback stops.
+        self.timing_log = timing_log
+        stats = TimingStats() if timing_log is not None else None
+        self.sequencer = Sequencer(state, output, stats=stats) if output is not None else None
         self.menu_open = False
         self.menu_editing = False
         self.menu_index = 0
@@ -210,6 +215,7 @@ class MiniStepRuntime:
     async def stop(self) -> None:
         if self.sequencer is not None:
             await self.sequencer.stop()
+            self._flush_timing_log()
         if self.output is not None:
             self.output.all_notes_off()
         self.state.held_notes.clear()
@@ -227,6 +233,20 @@ class MiniStepRuntime:
             return
         await self.sequencer.restart()
         self.state.status_message = "Restarted from step 1."
+
+    def _flush_timing_log(self) -> None:
+        if self.sequencer is None or self.sequencer.stats is None or self.timing_log is None:
+            return
+        summary = self.sequencer.stats.summary()
+        self.sequencer.stats.reset()
+        if summary is None:
+            return
+        label = f"{self.state.bpm:g} BPM 1/{self.state.step_division}"
+        try:
+            with self.timing_log.open("a", encoding="utf-8") as handle:
+                handle.write(summary.format(label) + "\n")
+        except OSError as error:
+            self.state.status_message = f"Timing log failed: {error}"
 
     async def shutdown(self) -> None:
         await self.stop()

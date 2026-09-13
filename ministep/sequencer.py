@@ -7,13 +7,22 @@ import asyncio
 from .clock import InternalClock, StepClock
 from .midi import MidiSink
 from .state import AppState, Step
+from .timing import TimingStats
 
 
 class Sequencer:
-    def __init__(self, state: AppState, output: MidiSink, clock: StepClock | None = None) -> None:
+    def __init__(
+        self,
+        state: AppState,
+        output: MidiSink,
+        clock: StepClock | None = None,
+        stats: TimingStats | None = None,
+    ) -> None:
         self.state = state
         self.output = output
         self.clock = clock or InternalClock()
+        # Optional in-memory diagnostics; None keeps the timing path free of bookkeeping.
+        self.stats = stats
         self._task: asyncio.Task[None] | None = None
         self._active_tied_note: int | None = None
 
@@ -24,6 +33,9 @@ class Sequencer:
         if self._task is not None and not self._task.done():
             self.state.playing = True
             return
+        # A fresh playback task must not inherit a stale grid from an earlier run,
+        # or the anchored clock would treat the gap as a stall and skip slots.
+        self.clock.reset()
         self.state.playing = True
         self._task = asyncio.create_task(self._run(), name="ministep-playback")
 
@@ -60,9 +72,12 @@ class Sequencer:
         if not self.state.sequence:
             return False
         loop_length = self.state.playback_length()
-        self.state.playhead %= loop_length
-        step = self.state.sequence[self.state.playhead]
         window = await self.clock.next_step(self.state.bpm, self.state.step_division)
+        woke = self.stats.now() if self.stats is not None else 0.0
+        # After a stall the clock drops whole grid slots; move the playhead past
+        # them so the loop stays in phase with the grid instead of replaying late.
+        self.state.playhead = (self.state.playhead + window.skipped) % loop_length
+        step = self.state.sequence[self.state.playhead]
         note = self._playback_note(step)
 
         if self._active_tied_note is not None and note != self._active_tied_note:
@@ -72,6 +87,14 @@ class Sequencer:
         should_sound = step.enabled and note is not None
         if should_sound and not is_continuing_tie:
             self.output.note_on(note, step.velocity, self._channel(), owner="sequencer")
+        if self.stats is not None:
+            self.stats.record(
+                scheduled=window.start,
+                actual=woke,
+                handler=self.stats.now() - woke,
+                duration=window.duration,
+                skipped=window.skipped,
+            )
 
         if should_sound and step.tie:
             self._active_tied_note = note
