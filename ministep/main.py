@@ -15,6 +15,7 @@ from .controller import DEFAULT_MIDI_MAPPING_PATH, Command, CommandName, SimpleM
 from .midi import MidiManager, MidoOutput, find_port, input_ports, output_ports
 from .minilab3_display import MiniLab3Display
 from .profiles import ProfileError, ProfileRouter, load_profile
+from .remote import DEFAULT_SOCKET_PATH, RemoteServer
 from .runtime import MiniStepRuntime
 from .state import AppState
 from .tui import DEFAULT_SEQUENCE_PATH, MiniStepApp
@@ -48,6 +49,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--timing-log",
         type=Path,
         help="Append a transport timing summary to this file each time playback stops",
+    )
+    parser.add_argument(
+        "--no-remote",
+        action="store_true",
+        help="Do not open the local control socket (see --remote-socket)",
+    )
+    parser.add_argument(
+        "--remote-socket",
+        type=Path,
+        default=DEFAULT_SOCKET_PATH,
+        help="Unix socket for remote control (NDJSON); default ~/.config/ministep/control.sock",
     )
     return parser
 
@@ -139,6 +151,7 @@ async def run(args: argparse.Namespace) -> int:
     display_task: asyncio.Task[None] | None = None
     profile_router: ProfileRouter | None = None
     profile_output: MidoOutput | None = None
+    remote: RemoteServer | None = None
 
     def receive(message) -> None:  # type: ignore[no-untyped-def]
         if display is not None and runtime is not None and runtime.handle_main_encoder(message):
@@ -203,6 +216,13 @@ async def run(args: argparse.Namespace) -> int:
         )
         if selected_input:
             manager.open_input(selected_input)
+        if not args.no_remote:
+            remote = RemoteServer(runtime, args.remote_socket, DEFAULT_SEQUENCE_PATH)
+            try:
+                await remote.start()
+            except OSError as error:
+                print(f"ministep: cannot open control socket: {error}", file=sys.stderr)
+                remote = None
         if args.minilab_display:
             try:
                 display = MiniLab3Display.open()
@@ -245,6 +265,8 @@ async def run(args: argparse.Namespace) -> int:
                 await display_task
         if display is not None:
             display.close()
+        if remote is not None:
+            await remote.close()
         if profile_output is not None:
             profile_output.close()
         if runtime is not None:

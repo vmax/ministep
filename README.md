@@ -197,6 +197,16 @@ pages:
 
 The profile must contain at least one named page; individual pages may leave knobs unbound. Knob numbers are 1–8, and CCs are 0–127.
 
+## Remote control socket
+
+MiniStep opens `~/.config/ministep/control.sock` (mode 0600) unless started with `--no-remote`; `--remote-socket PATH` moves it. The protocol is newline-delimited JSON. A client receives a full state snapshot on connect and another whenever anything changes; it sends commands as `{"cmd": NAME, "value": …}` where `NAME` is any controller command (`PLAY_STOP`, `COMMIT`, `REST`, `HOLD`, `UNDO`, `CLEAR`, `RESTART`, `RECORD_TOGGLE`, `BPM_UP`, `STEP_DIVISION_DOWN`, `TRANSPOSE_UP`, …) or an editor extra: `SAVE`, `LOAD`, `CURSOR ±n`, `CURSOR_NOTE ±n`, `REPLACE`, `DELETE`, `LOOP_CYCLE ±n`.
+
+```bash
+printf '{"cmd":"REST"}\n{"cmd":"PLAY_STOP"}\n' | nc -U ~/.config/ministep/control.sock
+```
+
+This is how the [MacroPad desk terminal](../../PERSONAL/macropad) drives MiniStep from physical keys.
+
 ## Sequence files
 
 `S` and `L` use `~/.config/ministep/sequence.json`; `--load path.json` loads any compatible JSON file. Files are human-readable and versioned:
