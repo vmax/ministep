@@ -119,6 +119,7 @@ The Textual TUI shows selected MIDI ports, tempo, division, gate, transpose, loo
 | `T`, then a MIDI key | Move the sequence root to that key's pitch class |
 | `K` | MIDI Learn (with `--mapping minilab3`) |
 | `S` / `L` | Save / load `~/.config/ministep/sequence.json` |
+| `Shift+S` / `Shift+L` | Save as / load a named pattern in `~/.config/ministep/patterns/` (type a name, `Enter`; `Esc` cancels) |
 | `Q` or `Ctrl+C` | Quit cleanly |
 
 `T` is a destructive root edit: it shifts all pitched steps by the nearest pitch-class interval and clears any live transpose. `H` ties the preceding note into a copied full-length step. Changing the global gate also updates the gates of existing steps.
@@ -199,7 +200,7 @@ The profile must contain at least one named page; individual pages may leave kno
 
 ## Remote control socket
 
-MiniStep opens `~/.config/ministep/control.sock` (mode 0600) unless started with `--no-remote`; `--remote-socket PATH` moves it. The protocol is newline-delimited JSON. A client receives a full state snapshot on connect and another whenever anything changes; it sends commands as `{"cmd": NAME, "value": …}` where `NAME` is any controller command (`PLAY_STOP`, `COMMIT`, `REST`, `HOLD`, `UNDO`, `CLEAR`, `RESTART`, `RECORD_TOGGLE`, `BPM_UP`, `STEP_DIVISION_DOWN`, `TRANSPOSE_UP`, …) or an editor extra: `SAVE`, `LOAD`, `CURSOR ±n`, `CURSOR_NOTE ±n`, `REPLACE`, `DELETE`, `LOOP_CYCLE ±n`.
+MiniStep opens `~/.config/ministep/control.sock` (mode 0600) unless started with `--no-remote`; `--remote-socket PATH` moves it. The protocol is newline-delimited JSON. A client receives a full state snapshot on connect and another whenever anything changes; it sends commands as `{"cmd": NAME, "value": …}` where `NAME` is any controller command (`PLAY_STOP`, `COMMIT`, `REST`, `HOLD`, `UNDO`, `CLEAR`, `RESTART`, `RECORD_TOGGLE`, `BPM_UP`, `STEP_DIVISION_DOWN`, `TRANSPOSE_UP`, …) or an editor extra: `SAVE`, `LOAD`, `SAVE_PATTERN name`, `LOAD_PATTERN name`, `CURSOR ±n`, `CURSOR_NOTE ±n`, `REPLACE`, `DELETE`, `LOOP_CYCLE ±n`.
 
 ```bash
 printf '{"cmd":"REST"}\n{"cmd":"PLAY_STOP"}\n' | nc -U ~/.config/ministep/control.sock
@@ -207,19 +208,23 @@ printf '{"cmd":"REST"}\n{"cmd":"PLAY_STOP"}\n' | nc -U ~/.config/ministep/contro
 
 This is how the [MacroPad desk terminal](../../PERSONAL/macropad) drives MiniStep from physical keys.
 
-## Sequence files
+## Sequence and pattern files
 
-`S` and `L` use `~/.config/ministep/sequence.json`; `--load path.json` loads any compatible JSON file. Files are human-readable and versioned:
+`S` and `L` use `~/.config/ministep/sequence.json`. `Shift+S` saves the current pattern under a name you type, one file per pattern in `~/.config/ministep/patterns/<name>.json`; `Shift+L` lists the saved names in the status line and loads the one you type. `--load path.json` loads any compatible JSON file. Names are sanitised to `[A-Za-z0-9._-]` for the filename (`Egypt 01` → `Egypt_01.json`); the name as typed is kept in the file. Writes go through a temporary file and an atomic rename, so an interrupted save never damages an existing pattern.
+
+A pattern holds only musical state: MIDI port names, playhead, play/record state, cursor, and the audition note are never saved. Files are human-readable and versioned:
 
 ```json
 {
   "version": 1,
+  "name": "bite_test",
   "bpm": 128.0,
   "step_division": 16,
   "loop_length": 16,
   "default_gate": 0.5,
   "default_velocity": 100,
   "transpose": 0,
+  "octave": 0,
   "output_channel": 1,
   "steps": [
     {"note": 60, "velocity": 110, "gate": 0.5, "enabled": true, "tie": false, "accent": false},
@@ -228,7 +233,7 @@ This is how the [MacroPad desk terminal](../../PERSONAL/macropad) drives MiniSte
 }
 ```
 
-`note: null` is a rest. `loop_length: null` means `FULL`; otherwise it is one of 8, 16, 32, or 64. Stored note values are unchanged by live `transpose`; the value is applied during playback. `tie` carries a note over to its following matching note. `enabled` and `accent` are preserved in the format, although this TUI has no controls to edit them.
+`note: null` is a rest. `loop_length: null` means `FULL`; otherwise it is one of 8, 16, 32, or 64. Stored note values are unchanged by live `transpose`; the value is applied during playback. `tie` carries a note over to its following matching note. `enabled` and `accent` are preserved in the format, although this TUI has no controls to edit them. Unknown keys are ignored and missing optional keys take defaults; a file with another `version` is refused with a status message instead of loading.
 
 ## Architecture
 
@@ -245,7 +250,8 @@ MIDI backend ──► controller mapping / profile router ──► runtime + s
 MiniLab OLED / pad SysEx ◄────────────────────────────── runtime state
 ```
 
-- `state.py` owns typed steps, edits, settings, note names, and JSON persistence.
+- `state.py` owns typed steps, edits, settings, note names, and JSON (de)serialisation.
+- `patterns.py` stores named patterns as one JSON file each with atomic writes; the TUI and remote socket only call it.
 - `sequencer.py` and `clock.py` perform async playback and timing without hardware/UI dependencies.
 - `midi.py` discovers and opens mido ports, moves callback input into asyncio, passes MIDI through, and tracks note ownership.
 - `controller.py` and `mappings/` translate learned hardware messages into abstract commands.

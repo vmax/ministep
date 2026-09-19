@@ -9,6 +9,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Static
 
 from .controller import Command, CommandName
+from .picker import PatternPicker
 from .runtime import MiniStepRuntime
 from .state import Step, note_name
 
@@ -38,6 +39,8 @@ class MiniStepApp(App[None]):
     #summary { height: 6; padding: 0 1; }
     #sequence { height: 1fr; padding: 0 1; }
     #status { height: 2; padding: 0 1; color: $text-muted; }
+    #prompt { display: none; }
+    #prompt.active { display: block; }
     .playing { color: $success; }
     """
     BINDINGS = [
@@ -58,6 +61,8 @@ class MiniStepApp(App[None]):
         ("home", "restart", "Restart"),
         ("s", "save", "Save"),
         ("l", "load", "Load"),
+        ("S", "save_pattern", "Save as"),
+        ("L", "load_pattern", "Load pattern"),
         ("q", "quit", "Quit"),
     ]
 
@@ -68,6 +73,8 @@ class MiniStepApp(App[None]):
         self.runtime = runtime
         self.sequence_path = sequence_path
         self._learn_selection: int | None = None
+        # "save" or "load" while the pattern-name prompt is open, else None.
+        self._prompt_mode: str | None = None
         self._rendered: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
@@ -76,6 +83,7 @@ class MiniStepApp(App[None]):
             yield Static(id="summary")
             yield Static(id="sequence")
             yield Static(id="status")
+        yield PatternPicker(id="prompt")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -122,18 +130,29 @@ class MiniStepApp(App[None]):
             f"|  Steps: {len(state.sequence)}",
         )
         self._update("sequence", self._sequence_grid())
-        learning = (
-            f"MIDI LEARN: ←/→ {LEARNABLE_COMMANDS[self._learn_selection].name}; "
-            "Enter: arm CC/pad; Esc: cancel"
-            if self._learn_selection is not None
-            else state.status_message
-        )
+        if self._learn_selection is not None:
+            first = (
+                f"MIDI LEARN: ←/→ {LEARNABLE_COMMANDS[self._learn_selection].name}; "
+                "Enter: arm CC/pad; Esc: cancel"
+            )
+        elif self._prompt_mode is not None:
+            first = self._prompt_help()
+        else:
+            first = state.status_message
         self._update(
             "status",
-            f"{learning}\n"
+            f"{first}\n"
             "←/→: select  •  ↑/↓: semitone  •  Shift+↑/↓: octave  •  H: hold  "
-            "•  T: set root  •  ,/.: BPM  •  PgUp/PgDn: division  •  K: MIDI Learn",
+            "•  T: set root  •  ,/.: BPM  •  PgUp/PgDn: division  •  K: MIDI Learn  "
+            "•  Shift+S/L: save/load pattern",
         )
+
+    def _prompt_help(self) -> str:
+        if self._prompt_mode == "save":
+            return (
+                "SAVE AS: type a new name or pick one to overwrite  •  ↑/↓ select  •  Enter  •  Esc"
+            )
+        return "LOAD: type to filter  •  ↑/↓ select  •  Enter  •  Esc"
 
     def _sequence_grid(self) -> str:
         steps = self.runtime.state.sequence
@@ -233,12 +252,66 @@ class MiniStepApp(App[None]):
         except (OSError, ValueError) as error:
             self.runtime.state.status_message = f"Load failed: {error}"
 
+    async def action_save_pattern(self) -> None:
+        self._open_prompt("save")
+
+    async def action_load_pattern(self) -> None:
+        if not self.runtime.patterns.list_names():
+            self.runtime.state.status_message = (
+                f"No saved patterns in {self.runtime.patterns.directory}"
+            )
+            return
+        self._open_prompt("load")
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        # While naming a pattern, every other shortcut is parked so typing a
+        # name cannot trigger transport or edit commands.
+        return self._prompt_mode is None
+
+    def _open_prompt(self, mode: str) -> None:
+        self._prompt_mode = mode
+        picker = self.query_one("#prompt", PatternPicker)
+        picker.add_class("active")
+        picker.open(
+            self.runtime.patterns.list_names(),
+            allow_new=mode == "save",
+            placeholder="new pattern name" if mode == "save" else "filter patterns",
+        )
+        self.refresh_bindings()
+        self.refresh_view()
+
+    def _close_prompt(self) -> None:
+        self._prompt_mode = None
+        picker = self.query_one("#prompt", PatternPicker)
+        picker.remove_class("active")
+        self.set_focus(None)
+        self.refresh_bindings()
+        self.refresh_view()
+
+    async def on_pattern_picker_picked(self, event: PatternPicker.Picked) -> None:
+        mode = self._prompt_mode
+        self._close_prompt()
+        if mode == "save":
+            self.runtime.save_pattern(event.name)
+        elif mode == "load":
+            await self.runtime.load_pattern(event.name)
+
     async def action_quit(self) -> None:
         await self.runtime.shutdown()
         self.exit()
 
     async def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
         key = event.key
+        if self._prompt_mode is not None:
+            # The focused Input owns text keys; Esc and Up/Down reach here.
+            if key == "escape":
+                self._close_prompt()
+                self.runtime.state.status_message = "Cancelled."
+                event.stop()
+            elif key in ("up", "down"):
+                self.query_one("#prompt", PatternPicker).move(1 if key == "down" else -1)
+                event.stop()
+            return
         if self._learn_selection is not None:
             if key in ("left", "up"):
                 self._learn_selection = (self._learn_selection - 1) % len(LEARNABLE_COMMANDS)

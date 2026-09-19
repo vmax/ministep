@@ -8,6 +8,7 @@ import mido
 
 from .controller import ABSOLUTE_CC_RANGES, Command, CommandName, SimpleMapping
 from .midi import OwnedMidiOutput
+from .patterns import PatternError, PatternStore
 from .sequencer import Sequencer
 from .state import LOOP_LENGTHS, PLAYBACK_DIVISIONS, AppState
 from .timing import TimingStats
@@ -38,8 +39,10 @@ class MiniStepRuntime:
         mapping_path: Path | None = None,
         control_pages: tuple[str, ...] = (),
         timing_log: Path | None = None,
+        pattern_store: PatternStore | None = None,
     ) -> None:
         self.state = state
+        self.patterns = pattern_store if pattern_store is not None else PatternStore()
         self.output = output
         self.mapping = mapping
         self.mapping_path = mapping_path
@@ -259,6 +262,33 @@ class MiniStepRuntime:
         if was_playing:
             await self.stop()
         self.state.load(path)
+
+    def save_pattern(self, name: str) -> bool:
+        """Save the current musical state under ``name``; report via status_message."""
+        try:
+            stored = self.patterns.save(self.state, name)
+        except PatternError as error:
+            self.state.status_message = f"Failed to save: {error}"
+            return False
+        self.state.status_message = f"Saved: {stored}"
+        return True
+
+    async def load_pattern(self, name: str) -> bool:
+        """Replace the current musical state with the named pattern.
+
+        Playback stops first so no note is left hanging on the old sequence.
+        The current state is untouched when loading fails.
+        """
+        try:
+            loaded = self.patterns.load(name)
+        except PatternError as error:
+            self.state.status_message = f"Failed to load: {error}"
+            return False
+        if self.state.playing:
+            await self.stop()
+        self.state.adopt(loaded)
+        self.state.status_message = f"Loaded: {self.patterns.path_for(name).stem}"
+        return True
 
     def handle_midi_message(self, message: mido.Message) -> None:
         """Called on the asyncio event loop, never directly from the mido callback."""

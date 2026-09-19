@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -254,45 +253,96 @@ class AppState:
         else:
             self.held_notes[note] = count - 1
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "version": 1,
-            "bpm": self.bpm,
-            "step_division": self.step_division,
-            "loop_length": self.loop_length,
-            "default_gate": self.default_gate,
-            "default_velocity": self.default_velocity,
-            "transpose": self.transpose,
-            "output_channel": self.output_channel,
-            "steps": [asdict(step) for step in self.sequence],
-        }
+    # Persisted pattern format. Additive changes keep the version; only a change
+    # that old readers cannot interpret bumps it.
+    FORMAT_VERSION = 1
+    STEP_FIELDS = frozenset(Step.__dataclass_fields__)
+
+    def to_dict(self, name: str | None = None) -> dict[str, Any]:
+        """Serialise the musical pattern only: no MIDI ports, transport, or UI state."""
+        data: dict[str, Any] = {"version": self.FORMAT_VERSION}
+        if name is not None:
+            data["name"] = name
+        data.update(
+            {
+                "bpm": self.bpm,
+                "step_division": self.step_division,
+                "loop_length": self.loop_length,
+                "default_gate": self.default_gate,
+                "default_velocity": self.default_velocity,
+                "transpose": self.transpose,
+                "octave": self.octave,
+                "output_channel": self.output_channel,
+                "steps": [asdict(step) for step in self.sequence],
+            }
+        )
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AppState:
-        if data.get("version", 1) != 1:
-            raise ValueError(f"Unsupported sequence format version: {data.get('version')}")
-        state = cls(
-            bpm=float(data.get("bpm", 128)),
-            step_division=int(data.get("step_division", 16)),
-            loop_length=data.get("loop_length"),
-            default_gate=float(data.get("default_gate", 0.5)),
-            default_velocity=int(data.get("default_velocity", 100)),
-            transpose=int(data.get("transpose", 0)),
-            output_channel=int(data.get("output_channel", 1)),
-        )
-        state.sequence = [Step(**raw) for raw in data.get("steps", [])]
+        """Build a state from pattern JSON.
+
+        Unknown keys are ignored and missing optional keys take defaults, so
+        files written by slightly newer or older builds still load. Anything
+        structurally wrong raises ``ValueError`` with a readable message.
+        """
+        if not isinstance(data, dict):
+            raise ValueError("Pattern file must contain a JSON object")
+        version = data.get("version", 1)
+        if version != cls.FORMAT_VERSION:
+            raise ValueError(
+                f"Unsupported pattern version {version!r} (this MiniStep reads version "
+                f"{cls.FORMAT_VERSION})"
+            )
+        try:
+            state = cls(
+                bpm=float(data.get("bpm", 128)),
+                step_division=int(data.get("step_division", 16)),
+                loop_length=data.get("loop_length"),
+                default_gate=float(data.get("default_gate", 0.5)),
+                default_velocity=int(data.get("default_velocity", 100)),
+                transpose=int(data.get("transpose", 0)),
+                octave=int(data.get("octave", 0)),
+                output_channel=int(data.get("output_channel", 1)),
+            )
+            raw_steps = data.get("steps", [])
+            if not isinstance(raw_steps, list):
+                raise ValueError("steps must be a list")
+            state.sequence = [cls._step_from_dict(raw) for raw in raw_steps]
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Invalid pattern data: {error}") from error
         return state
 
-    def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.to_dict(), indent=2) + "\n", encoding="utf-8")
-        self.status_message = f"Saved {len(self.sequence)} steps to {path}."
+    @classmethod
+    def _step_from_dict(cls, raw: Any) -> Step:
+        if not isinstance(raw, dict):
+            raise ValueError("each step must be an object")
+        known = {key: value for key, value in raw.items() if key in cls.STEP_FIELDS}
+        if "note" not in known:
+            raise ValueError("step is missing 'note'")
+        return Step(**known)
 
-    def load(self, path: Path) -> None:
-        loaded = self.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    def adopt(self, loaded: AppState) -> None:
+        """Replace this state's musical content with ``loaded``.
+
+        MIDI port selection belongs to the running session, not the pattern, so
+        it survives. Transport and edit positions reset because the old ones no
+        longer refer to anything meaningful.
+        """
         selected_input, selected_output = self.selected_input, self.selected_output
         self.__dict__.update(loaded.__dict__)
         self.selected_input, self.selected_output = selected_input, selected_output
+
+    def save(self, path: Path) -> None:
+        from .patterns import write_json_atomic
+
+        write_json_atomic(path, self.to_dict())
+        self.status_message = f"Saved {len(self.sequence)} steps to {path}."
+
+    def load(self, path: Path) -> None:
+        from .patterns import read_json
+
+        self.adopt(self.from_dict(read_json(path)))
         self.status_message = f"Loaded {len(self.sequence)} steps from {path}."
 
 

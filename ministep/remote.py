@@ -10,6 +10,7 @@ object per line:
     {"cmd": "BPM_UP", "value": 5}
     {"cmd": "CURSOR", "value": -1}
     {"cmd": "SAVE"}
+    {"cmd": "SAVE_PATTERN", "value": "bite_test"}
 
 ``cmd`` is any :class:`~ministep.controller.CommandName` member name, or
 one of the editor extras below. Unknown or malformed lines get an
@@ -35,7 +36,17 @@ POLL_INTERVAL_S = 0.05
 MAX_LINE = 4096
 
 # Editor operations that are not controller commands.
-EXTRA_COMMANDS = ("SAVE", "LOAD", "CURSOR", "CURSOR_NOTE", "REPLACE", "DELETE", "LOOP_CYCLE")
+EXTRA_COMMANDS = (
+    "SAVE",
+    "LOAD",
+    "SAVE_PATTERN",
+    "LOAD_PATTERN",
+    "CURSOR",
+    "CURSOR_NOTE",
+    "REPLACE",
+    "DELETE",
+    "LOOP_CYCLE",
+)
 
 
 def snapshot(runtime: MiniStepRuntime) -> dict[str, Any]:
@@ -96,6 +107,15 @@ async def apply(
         except (OSError, ValueError) as error:
             return f"load failed: {error}"
         return None
+    if cmd in ("SAVE_PATTERN", "LOAD_PATTERN"):
+        if not isinstance(value, str) or not value.strip():
+            return f"{cmd} needs a pattern name in value"
+        ok = (
+            runtime.save_pattern(value)
+            if cmd == "SAVE_PATTERN"
+            else await runtime.load_pattern(value)
+        )
+        return None if ok else state.status_message
     if cmd == "CURSOR":
         state.move_cursor(_int(value, 1))
         return None
