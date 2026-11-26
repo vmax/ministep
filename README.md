@@ -1,6 +1,8 @@
 # MiniStep
 
-A hardware-style MIDI step recorder: audition one note at a time, commit the notes you want, then play a perfectly clocked sequence.
+A hardware-style MIDI step recorder for macOS: audition one note at a time, commit the notes you want, then play a perfectly clocked sequence. Native Rust app in the spirit of Teenage Engineering, with a built-in drum synth.
+
+![Melodic track and synth panel](docs/images/melodic.png)
 
 ```text
 play C
@@ -23,23 +25,21 @@ C | Eb | -- | G | ...
 
 Take five seconds or five minutes to find the next note. MiniStep records steps, not the wall-clock timing between them.
 
-It is a small, macOS-first MIDI controller/sequencer—not a DAW and not an audio processor. It works with standard MIDI input/output ports, and has a deeper Arturia MiniLab 3 integration for learned controls, OLED feedback, RGB pads, and synth-control pages.
+It is a small, macOS-first MIDI sequencer, not a DAW. Melodies go out as MIDI to your synth; drums can go out as MIDI or play on the built-in drum synth. It works with standard MIDI ports (or its own virtual port, **MiniStep Out**) and has a deeper Arturia MiniLab 3 integration for learned controls, OLED feedback, RGB pads, and synth-control pages.
 
 ```text
 MIDI keyboard / MiniLab 3
              │
              ▼
          MiniStep
-             │  MIDI only: audition pass-through + sequencer playback
-             ▼
-       IAC "MiniStep"
-          ├──► Ableton Live ──► instrument plug-in
-          └──► standalone MIDI synth
+             │  audition pass-through + sequencer playback
+             ├──► MIDI: "MiniStep Out" / IAC ──► Ableton Live, standalone synths
+             └──► audio: built-in drum synth ──► speakers
 ```
 
-> A short demo belongs here: slowly enter notes, watch the MiniLab feedback and the window update, then press PLAY.
+![All drum lanes in one grid, playing](docs/images/drums.png)
 
-MiniStep is written in Rust with a native egui window in a hardware style: transport bar, track list, a 16-step grid with a velocity lane, and a synth panel of knobs that send MIDI CC. It replaced the original Python/Textual build, which is in git history up to commit `09e2717`.
+MiniStep is written in Rust with a native egui window in a hardware style: transport bar, track list, a 16-step grid with a velocity lane, a drum-machine grid for all drum lanes, and a synth panel. The transport runs on a real-time thread: the worst-case step lateness measured is 6 µs (the original Python build: 29 ms); see `docs/TIMING.md`. The Python/Textual build is in git history up to commit `09e2717`.
 
 ## What it does
 
@@ -48,7 +48,7 @@ MiniStep is written in Rust with a native egui window in a hardware style: trans
 - **Sequencing tools.** Add rests, ties/holds, undo the final step, clear, restart, edit a selected step, transpose live, or set a new pitch-class root.
 - **Clocked playback.** Internal monotonic timing on an anchored grid plays the sequence at a selectable BPM, 1/4, 1/8, 1/16, or 1/32 division, with a global gate. Late wake-ups never shift the transport; see `docs/TIMING.md`. Pass `--timing-log PATH` to append timing summaries whenever playback stops.
 - **Non-destructive loop spans.** Choose `FULL → 8 → 16 → 32 → 64`; selecting `16`, for example, loops the first 16 stored steps without truncating later ones.
-- **Drum track.** A second, 16-step track with Kick, Snare, Closed Hat, and Open Hat lanes fires short MIDI notes (40 ms) on its own channel and, optionally, its own output port such as an IAC bus into an Ableton Drum Rack. Both tracks run from one clock, so they cannot drift apart. All lanes are edited together as one drum-machine grid (a row per lane, 16 steps): click or drag to paint hits across steps and lanes; the focused lane — click its name, or `Up`/`Down` — gets the velocity row and the synth panel. `Tab` switches the editor between the melodic track and the drum group. Drums follow the same audition → commit → step workflow as notes: play `C1`/`D1`/`F#1`/`A#1` on the keyboard to hear a lane, then `Enter` writes the played hits (with their velocities) into the current step and moves on.
+- **Drum track.** A second, 16-step track with Kick, Snare, Closed Hat, and Open Hat lanes (add more with `+`). It plays on the built-in drum synth, or fires short MIDI notes (40 ms) on its own channel and, optionally, its own output port such as an IAC bus into an Ableton Drum Rack. Both tracks run from one clock, so they cannot drift apart. All lanes are edited together as one drum-machine grid (a row per lane, 16 steps): click or drag to paint hits across steps and lanes; the focused lane — click its name, or `Up`/`Down` — gets the velocity row and the synth panel. `Tab` switches the editor between the melodic track and the drum group. Drums follow the same audition → commit → step workflow as notes: play `C1`/`D1`/`F#1`/`A#1` on the keyboard to hear a lane, then `Enter` writes the played hits (with their velocities) into the current step and moves on.
 - **Built-in drum synth.** Every drum lane has its own synthesized voice — kick, snare, closed/open hat (closed chokes open), clap, tom, rim, cowbell, cymbal — with TUNE, DECAY, TONE, a model-specific fourth knob (PUNCH, SNAP, METAL, SPREAD, SWEEP, DETUNE) and LEVEL. No samples: every hit is computed. Hits are placed on their exact audio sample (measured through a loopback device: ±3 samples, no drift), so the drums sound as tight as the MIDI clock. Drums can go to the synth, to MIDI, or both (`synth / both / midi` in the drum panel, or `--drum-engine`). Without `--drum-output` the synth is the default.
 - **Persistence.** Load JSON at startup and save/load the default sequence from the app. Named patterns are per track: `Shift+S`/`Shift+L` save and load melodic patterns on the melodic track and drum patterns on the drum track, each in its own directory, so loading a new melody never changes the beat and vice versa. Older combined pattern files still load.
 - **MIDI-safe pass-through.** Notes from live input and sequencer playback are ownership-tracked, so one source's Note Off does not cut off the other source's same-pitch note.
