@@ -46,3 +46,31 @@ pub fn promote_current_thread() -> bool {
 pub fn promote_current_thread() -> bool {
     false
 }
+
+/// Block until monotonic time `t` (seconds, see [`crate::clock::monotonic`]).
+///
+/// On macOS this is `mach_wait_until`, which on a time-constraint thread wakes
+/// within tens of microseconds; condition-variable timeouts are coalesced by
+/// the kernel and overshoot by 1-4 ms even on real-time threads (measured).
+#[cfg(target_os = "macos")]
+pub fn sleep_until(t: f64) {
+    use mach2::mach_time::{mach_absolute_time, mach_timebase_info, mach_timebase_info_data_t, mach_wait_until};
+    let remaining = t - crate::clock::monotonic();
+    if remaining <= 0.0 {
+        return;
+    }
+    unsafe {
+        let mut tb = mach_timebase_info_data_t { numer: 0, denom: 0 };
+        mach_timebase_info(&mut tb);
+        let ticks = remaining * 1e9 * f64::from(tb.denom) / f64::from(tb.numer);
+        mach_wait_until(mach_absolute_time() + ticks as u64);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn sleep_until(t: f64) {
+    let remaining = t - crate::clock::monotonic();
+    if remaining > 0.0 {
+        std::thread::sleep(std::time::Duration::from_secs_f64(remaining));
+    }
+}

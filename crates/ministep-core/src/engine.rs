@@ -27,6 +27,8 @@ use crate::timing::TimingStats;
 use crate::transport::{Outputs, Transport};
 
 pub const BASE_MENU_ITEMS: [&str; 5] = ["BPM", "GATE", "DIVISION", "TRANSPOSE", "LOOP LENGTH"];
+/// Wake from the coarse (coalesced) wait this long before a deadline.
+const COARSE_MARGIN: f64 = 0.006;
 const MAIN_ENCODER_TURNS: [u8; 2] = [28, 114];
 const MAIN_ENCODER_PRESSES: [u8; 2] = [115, 118];
 const MAIN_ENCODER_SHIFT_PRESSES: [u8; 2] = [113, 119];
@@ -140,7 +142,7 @@ impl Default for EngineConfig {
             mapping_path: None,
             encoder_menu: false,
             profile: None,
-            spin_margin: 0.000_8,
+            spin_margin: 0.000_1,
             realtime: true,
         }
     }
@@ -867,7 +869,10 @@ fn instant_at(t: f64) -> Instant {
 
 fn transport_thread(shared: &Shared, wake: &Receiver<()>, spin_margin: f64, realtime: bool) {
     if realtime {
-        crate::rt::promote_current_thread();
+        let ok = crate::rt::promote_current_thread();
+        if std::env::var_os("MINISTEP_DEBUG_RT").is_some() {
+            eprintln!("transport thread realtime policy: {ok}");
+        }
     }
     while shared.running.load(Ordering::Acquire) {
         let (deadline, stepped) = {
@@ -881,20 +886,22 @@ fn transport_thread(shared: &Shared, wake: &Receiver<()>, spin_margin: f64, real
         if stepped {
             shared.notify();
         }
-        // Sleep until shortly before the deadline (or a wake-up), then spin.
-        let coarse = instant_at(deadline - spin_margin);
-        match wake.recv_deadline(coarse) {
-            Ok(()) => {
-                while wake.try_recv().is_ok() {}
-                continue;
+        // Three stages: a wakeable (but coarse, coalesced) wait until well before
+        // the deadline, a precise uninterruptible Mach wait, then a short spin.
+        // See docs/TIMING.md for the measurements behind the margins.
+        let coarse = instant_at(deadline - COARSE_MARGIN);
+        if deadline - monotonic() > COARSE_MARGIN {
+            match wake.recv_deadline(coarse) {
+                Ok(()) => {
+                    while wake.try_recv().is_ok() {}
+                    continue;
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             }
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
         }
+        crate::rt::sleep_until(deadline - spin_margin);
         while monotonic() < deadline {
-            if !wake.is_empty() {
-                break;
-            }
             std::hint::spin_loop();
         }
     }
