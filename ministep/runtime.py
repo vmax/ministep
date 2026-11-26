@@ -8,7 +8,7 @@ import mido
 
 from .controller import ABSOLUTE_CC_RANGES, Command, CommandName, SimpleMapping
 from .midi import OwnedMidiOutput
-from .patterns import PatternError, PatternStore
+from .patterns import DRUMS, KIND_LABELS, MELODIC, PatternError, PatternStore
 from .sequencer import Sequencer
 from .state import LOOP_LENGTHS, PLAYBACK_DIVISIONS, AppState
 from .timing import TimingStats
@@ -40,17 +40,24 @@ class MiniStepRuntime:
         control_pages: tuple[str, ...] = (),
         timing_log: Path | None = None,
         pattern_store: PatternStore | None = None,
+        drum_output: OwnedMidiOutput | None = None,
     ) -> None:
         self.state = state
         self.patterns = pattern_store if pattern_store is not None else PatternStore()
         self.output = output
+        # None: drums share the melodic port. Set when --drum-output names another port.
+        self.drum_output = drum_output
         self.mapping = mapping
         self.mapping_path = mapping_path
         self.midi_learn_target: CommandName | None = None
         # Optional transport diagnostics: summarised to a file whenever playback stops.
         self.timing_log = timing_log
         stats = TimingStats() if timing_log is not None else None
-        self.sequencer = Sequencer(state, output, stats=stats) if output is not None else None
+        self.sequencer = (
+            Sequencer(state, output, stats=stats, drum_output=drum_output)
+            if output is not None
+            else None
+        )
         self.menu_open = False
         self.menu_editing = False
         self.menu_index = 0
@@ -61,7 +68,7 @@ class MiniStepRuntime:
     async def execute(self, command: Command) -> None:
         name, value = command.name, command.value
         if name == CommandName.COMMIT:
-            self.state.commit_last_note()
+            self.commit()
         elif name == CommandName.HOLD:
             self.state.append_hold()
         elif name == CommandName.RECORD:
@@ -69,7 +76,11 @@ class MiniStepRuntime:
         elif name == CommandName.RECORD_TOGGLE:
             self.set_recording(not self.state.recording)
         elif name == CommandName.REST:
-            self.state.append_rest()
+            if self.state.active_track == "drums":
+                self.state.drums.skip_step()
+                self.state.status_message = f"Drum step {self.state.drums.cursor_step + 1}."
+            else:
+                self.state.append_rest()
         elif name == CommandName.UNDO:
             self.state.undo()
         elif name == CommandName.CLEAR:
@@ -109,6 +120,43 @@ class MiniStepRuntime:
             self.state.status_message = "Root selection armed: play the desired root MIDI note."
         elif name == CommandName.SET_TRANSPOSE and value is not None:
             self.state.transpose = int(value)
+
+    def commit(self) -> bool:
+        """COMMIT for the active track: melodic last note, or the auditioned drum hits."""
+        if self.state.active_track != "drums":
+            return self.state.commit_last_note()
+        drums = self.state.drums
+        step = drums.cursor_step + 1
+        committed = drums.commit_audition()
+        if not committed:
+            self.state.status_message = "Nothing to commit: play a drum note first."
+            return False
+        names = " + ".join(lane.name for lane in committed)
+        self.state.status_message = f"Committed {names} on step {step}."
+        return True
+
+    def _drum_sink(self) -> OwnedMidiOutput | None:
+        return self.drum_output if self.drum_output is not None else self.output
+
+    def _handle_drum_note(self, message: mido.Message) -> bool:
+        """Audition a drum lane from the keyboard; False when the note is not a lane."""
+        drums = self.state.drums
+        index = drums.lane_for_note(message.note)
+        if index is None:
+            return False
+        channel = drums.channel - 1
+        sink = self._drum_sink()
+        if message.type == "note_on" and message.velocity > 0:
+            lane = drums.audition_note(message.note, message.velocity)
+            if sink is not None:
+                sink.note_on(message.note, message.velocity, channel, owner="input")
+            if lane is not None:
+                self.state.status_message = (
+                    f"Auditioning {lane.name} (velocity {message.velocity}); Enter commits."
+                )
+        elif sink is not None:
+            sink.note_off(message.note, channel, owner="input")
+        return True
 
     def set_recording(self, enabled: bool) -> None:
         """Toggle non-temporal step recording; this never changes transport state."""
@@ -209,7 +257,7 @@ class MiniStepRuntime:
         if self.sequencer is None:
             self.state.status_message = "Choose a MIDI output before playing."
             return
-        if not self.state.sequence:
+        if not self.sequencer.has_content():
             self.state.status_message = "Sequence is empty."
             return
         self.sequencer.start(restart=True)
@@ -221,6 +269,8 @@ class MiniStepRuntime:
             self._flush_timing_log()
         if self.output is not None:
             self.output.all_notes_off()
+        if self.drum_output is not None and self.drum_output is not self.output:
+            self.drum_output.all_notes_off()
         self.state.held_notes.clear()
         self.state.status_message = "Stopped; sent All Notes Off."
 
@@ -231,7 +281,7 @@ class MiniStepRuntime:
             self.play()
 
     async def restart(self) -> None:
-        if self.sequencer is None or not self.state.sequence:
+        if self.sequencer is None or not self.sequencer.has_content():
             self.play()
             return
         await self.sequencer.restart()
@@ -263,31 +313,47 @@ class MiniStepRuntime:
             await self.stop()
         self.state.load(path)
 
-    def save_pattern(self, name: str) -> bool:
-        """Save the current musical state under ``name``; report via status_message."""
+    @property
+    def pattern_kind(self) -> str:
+        """Which named-pattern store Shift+S / Shift+L address: the active track."""
+        return DRUMS if self.state.active_track == "drums" else MELODIC
+
+    def save_pattern(self, name: str, kind: str | None = None) -> bool:
+        """Save the active track (or ``kind``) under ``name``; report via status_message."""
+        kind = kind or self.pattern_kind
         try:
-            stored = self.patterns.save(self.state, name)
+            stored = self.patterns.save(kind, self.state, name)
         except PatternError as error:
             self.state.status_message = f"Failed to save: {error}"
             return False
-        self.state.status_message = f"Saved: {stored}"
+        self.state.status_message = f"Saved {KIND_LABELS[kind]}: {stored}"
         return True
 
-    async def load_pattern(self, name: str) -> bool:
-        """Replace the current musical state with the named pattern.
+    async def load_pattern(self, name: str, kind: str | None = None) -> bool:
+        """Replace the active track (or ``kind``) with the named pattern.
 
-        Playback stops first so no note is left hanging on the old sequence.
-        The current state is untouched when loading fails.
+        Only that track changes; tempo, the other track, ports, and the active
+        track stay. Playback stops first so no note is left hanging on the old
+        content. The current state is untouched when loading fails.
         """
+        kind = kind or self.pattern_kind
         try:
-            loaded = self.patterns.load(name)
+            section = self.patterns.read_section(kind, name)
         except PatternError as error:
             self.state.status_message = f"Failed to load: {error}"
             return False
         if self.state.playing:
             await self.stop()
-        self.state.adopt(loaded)
-        self.state.status_message = f"Loaded: {self.patterns.path_for(name).stem}"
+        try:
+            if kind == MELODIC:
+                self.state.apply_melodic(section)
+            else:
+                self.state.apply_drums(section)
+        except ValueError as error:
+            self.state.status_message = f"Failed to load: {name}: {error}"
+            return False
+        stem = self.patterns.path_for(kind, name).stem
+        self.state.status_message = f"Loaded {KIND_LABELS[kind]}: {stem}"
         return True
 
     def handle_midi_message(self, message: mido.Message) -> None:
@@ -327,6 +393,12 @@ class MiniStepRuntime:
                     asyncio.create_task(self.execute(command))
                 return
 
+        if (
+            self.state.active_track == "drums"
+            and message.type in ("note_on", "note_off")
+            and self._handle_drum_note(message)
+        ):
+            return
         channel = self.state.output_channel - 1
         if message.type == "note_on" and message.velocity > 0:
             self.state.note_held(message.note, message.velocity)

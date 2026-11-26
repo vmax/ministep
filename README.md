@@ -46,7 +46,8 @@ MIDI keyboard / MiniLab 3
 - **Sequencing tools.** Add rests, ties/holds, undo the final step, clear, restart, edit a selected step, transpose live, or set a new pitch-class root.
 - **Clocked playback.** Internal monotonic timing on an anchored grid plays the sequence at a selectable BPM, 1/4, 1/8, 1/16, or 1/32 division, with a global gate. Late wake-ups never shift the transport; see `docs/TIMING.md`. Pass `--timing-log PATH` to append timing summaries whenever playback stops.
 - **Non-destructive loop spans.** Choose `FULL → 8 → 16 → 32 → 64`; selecting `16`, for example, loops the first 16 stored steps without truncating later ones.
-- **Persistence.** Load JSON at startup and save/load the default sequence from the TUI.
+- **Drum track.** A second, 16-step track with Kick, Snare, Closed Hat, and Open Hat lanes fires short MIDI notes (40 ms) on its own channel and, optionally, its own output port such as an IAC bus into an Ableton Drum Rack. Both tracks run from one clock, so they cannot drift apart. `Tab` switches the editor between tracks. Drums follow the same audition → commit → step workflow as notes: play `C1`/`D1`/`F#1`/`A#1` on the keyboard to hear a lane, then `Enter` writes the played hits (with their velocities) into the current step and moves on.
+- **Persistence.** Load JSON at startup and save/load the default sequence from the TUI. Named patterns are per track: `Shift+S`/`Shift+L` save and load melodic patterns on the melodic track and drum patterns on the drum track, each in its own directory, so loading a new melody never changes the beat and vice versa. Older combined pattern files still load.
 - **MIDI-safe pass-through.** Notes from live input and sequencer playback are ownership-tracked, so one source's Note Off does not cut off the other source's same-pitch note.
 
 ## Installation
@@ -119,8 +120,25 @@ The Textual TUI shows selected MIDI ports, tempo, division, gate, transpose, loo
 | `T`, then a MIDI key | Move the sequence root to that key's pitch class |
 | `K` | MIDI Learn (with `--mapping minilab3`) |
 | `S` / `L` | Save / load `~/.config/ministep/sequence.json` |
-| `Shift+S` / `Shift+L` | Save as / load a named pattern in `~/.config/ministep/patterns/` (type a name, `Enter`; `Esc` cancels) |
+| `Shift+S` / `Shift+L` | Save as / load a named pattern of the active track: melodic patterns in `~/.config/ministep/patterns/melodic/`, drum patterns in `.../drums/` (type a name, `Enter`; `Esc` cancels) |
+| `Tab` | Switch the editor between the melodic and drum track (`TRACK: MELODIC` / `TRACK: DRUMS` in the header) |
 | `Q` or `Ctrl+C` | Quit cleanly |
+
+With the drum track active the grid shows one lane per row in four beat groups (`x` hit, `X` hit with velocity ≥ 115, `.` silent, `·` silent on a beat, `+` a played hit waiting for `Enter`). The cursor cell has a yellow background, the playing column is green. The header drops melodic-only state (transpose, octave, root, gate) and shows `AUDITION` and `STEP n/16` instead. These keys change meaning; transport, BPM, division, and pattern keys stay the same.
+
+| Computer key (drums) | Action |
+| --- | --- |
+| MIDI `C1` / `D1` / `F#1` / `A#1` | Audition Kick / Snare / Closed Hat / Open Hat on the drum output; several keys build one step. Playing a lane again only updates its velocity. Other keys still audition the synth and are not recorded. |
+| `Enter` | With an audition pending: write those hits (MIDI velocities) into the cursor step and advance. Otherwise: toggle the hit under the cursor (velocity 100). |
+| `R` | Skip the cursor step (drum "rest"), dropping any pending audition |
+| `Esc` | Drop the pending audition |
+| `Left` / `Right` | Move the cursor one step |
+| `Up` / `Down`, `1`–`4` | Move the cursor one lane / jump to a lane |
+| `-` / `+` (or `=`) | Hit velocity −10 / +10 (1..127) |
+| `X` or `Delete` | Clear the hit under the cursor |
+| `C` | Clear the whole drum track |
+
+REC auto-commit stays melodic-only; drums are always committed explicitly.
 
 `T` is a destructive root edit: it shifts all pitched steps by the nearest pitch-class interval and clears any live transpose. `H` ties the preceding note into a copied full-length step. Changing the global gate also updates the gates of existing steps.
 
@@ -210,16 +228,19 @@ This is how the [MacroPad desk terminal](../../PERSONAL/macropad) drives MiniSte
 
 ## Sequence and pattern files
 
-`S` and `L` use `~/.config/ministep/sequence.json`. `Shift+S` saves the current pattern under a name you type, one file per pattern in `~/.config/ministep/patterns/<name>.json`; `Shift+L` lists the saved names in the status line and loads the one you type. `--load path.json` loads any compatible JSON file. Names are sanitised to `[A-Za-z0-9._-]` for the filename (`Egypt 01` → `Egypt_01.json`); the name as typed is kept in the file. Writes go through a temporary file and an atomic rename, so an interrupted save never damages an existing pattern.
+Two kinds of files exist.
 
-A pattern holds only musical state: MIDI port names, playhead, play/record state, cursor, and the audition note are never saved. Files are human-readable and versioned:
+**Named patterns (`Shift+S` / `Shift+L`)** are per track. With `TRACK: MELODIC` the picker saves and lists melodic patterns in `~/.config/ministep/patterns/melodic/<name>.json`; with `TRACK: DRUMS` it saves and lists drum patterns in `~/.config/ministep/patterns/drums/<name>.json`. Loading a melodic pattern never touches the drum hits, velocities, lane mapping, or channel; loading a drum pattern never touches the notes, holds, velocities, root, transpose, octave, or gate. Neither kind stores BPM or division: tempo is transport state and stays whatever it is. The prompt title says which kind it is (`SAVE DRUM PATTERN AS`, `LOAD MELODIC PATTERN`), fuzzy filtering and overwrite-by-picking work the same in both. The remote `SAVE_PATTERN`/`LOAD_PATTERN` commands follow the active track too.
+
+Names are sanitised to `[A-Za-z0-9._-]` for the filename (`Egypt 01` → `Egypt_01.json`); the name as typed is kept in the file. Writes go through a temporary file and an atomic rename, so an interrupted save never damages an existing pattern. Ports, playhead, play/record state, cursors, the active track, and audition state are never saved.
+
+Melodic pattern:
 
 ```json
 {
   "version": 1,
-  "name": "bite_test",
-  "bpm": 128.0,
-  "step_division": 16,
+  "type": "melodic",
+  "name": "bite_01",
   "loop_length": 16,
   "default_gate": 0.5,
   "default_velocity": 100,
@@ -233,7 +254,40 @@ A pattern holds only musical state: MIDI port names, playhead, play/record state
 }
 ```
 
-`note: null` is a rest. `loop_length: null` means `FULL`; otherwise it is one of 8, 16, 32, or 64. Stored note values are unchanged by live `transpose`; the value is applied during playback. `tie` carries a note over to its following matching note. `enabled` and `accent` are preserved in the format, although this TUI has no controls to edit them. Unknown keys are ignored and missing optional keys take defaults; a file with another `version` is refused with a status message instead of loading.
+`note: null` is a rest. `loop_length: null` means `FULL`; otherwise it is one of 8, 16, 32, or 64. Stored note values are unchanged by live `transpose`; the value is applied during playback. `tie` carries a note over to its following matching note. `enabled` and `accent` are preserved in the format, although this TUI has no controls to edit them. The root is derived from the first pitched step, so it travels with the notes.
+
+Drum pattern:
+
+```json
+{
+  "version": 1,
+  "type": "drums",
+  "name": "electro_01",
+  "channel": 10,
+  "lanes": [
+    {"name": "Kick", "note": "C1", "steps": [{"active": true, "velocity": 110}, {"active": false, "velocity": 100}, "... 16 in total"]},
+    {"name": "Snare", "note": "D1", "steps": ["..."]},
+    {"name": "Closed Hat", "note": "F#1", "steps": ["..."]},
+    {"name": "Open Hat", "note": "A#1", "steps": ["..."]}
+  ]
+}
+```
+
+Lane notes are written as Ableton-style names (`C1` = 36) and may be read back as names or numbers; `channel` is the one-based drum MIDI channel (musical routing, like the melodic `output_channel`); the output *port* is not stored. Unknown keys are ignored and missing optional keys take defaults. A file of the wrong type, an unknown `type`, or an unsupported `version` is refused with a status message instead of loading.
+
+**Older combined patterns.** Before the split, `Shift+S` wrote one file per pattern straight into `~/.config/ministep/patterns/` holding both tracks plus tempo (`"version": 2` with `melodic`/`drums` objects, or the original flat `"version": 1` melodic layout). Those files are still listed in both pickers and still load: in melodic mode only their melodic section is applied, in drum mode only their drum section (a flat version 1 file has none and says so). Their BPM is ignored. Saving under the same name writes a new per-track file into the sub-directory, which from then on shadows the old file; nothing is deleted automatically.
+
+**The whole-session snapshot (`S` / `L`, `--load`)** is `~/.config/ministep/sequence.json`: the combined version 2 layout above, with both tracks and the tempo. It is a "where was I" file, not a pattern.
+
+## Drums into Ableton Live via IAC
+
+The drum track sends plain MIDI notes, so any Drum Rack can play it. Melodic and drum notes come from the same scheduler; no MIDI clock or Link is needed.
+
+1. **Create an IAC bus (macOS).** Open *Audio MIDI Setup* → *Window* → *Show MIDI Studio*, double-click *IAC Driver*, tick *Device is online*, and add a port (e.g. `Drums`). It appears as `IAC Driver Drums`.
+2. **Point MiniStep's drum output at it.** `ministep --list-midi` shows the exact name; then start with `--drum-output "IAC Driver Drums"` alongside your normal `--output`. Without `--drum-output` drums share the melodic port. The header line `DRUM OUT:` confirms the port and channel.
+3. **In Ableton:** create a MIDI track, drop a *Drum Rack* on it, and load kick, snare, closed hat, and open hat on pads `C1`, `D1`, `F#1`, `A#1` (the default GM layout, which the default lanes use).
+4. **MIDI From:** set the track's input to `IAC Driver (Drums)` and the channel to `Ch. 10` (or `All Channels`).
+5. **Monitor / Arm:** set *Monitor* to `In`, or leave it on `Auto` and arm the track. Press `Space` in MiniStep; the Drum Rack pads light up on each hit.
 
 ## Architecture
 

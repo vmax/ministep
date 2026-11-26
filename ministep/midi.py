@@ -137,13 +137,27 @@ class MidiManager:
         self.on_message = on_message
         self.input: mido.ports.BaseInput | None = None
         self.output: OwnedMidiOutput | None = None
+        self.output_name: str | None = None
+        self.drum_output: OwnedMidiOutput | None = None
 
     def open_input(self, name: str) -> None:
         self.input = mido.open_input(name, callback=self._on_mido_message)
 
     def open_output(self, name: str) -> OwnedMidiOutput:
         self.output = OwnedMidiOutput(MidoOutput(mido.open_output(name)))
+        self.output_name = name
         return self.output
+
+    def open_drum_output(self, name: str) -> OwnedMidiOutput:
+        """Open the drum port; the same name as the melodic port shares that object.
+
+        Sharing keeps one owner table per physical port, so a drum note and a
+        melodic note on the same pitch and channel cannot cut each other off.
+        """
+        if self.output is not None and name == self.output_name:
+            return self.output
+        self.drum_output = OwnedMidiOutput(MidoOutput(mido.open_output(name)))
+        return self.drum_output
 
     def _on_mido_message(self, message: mido.Message) -> None:
         self.loop.call_soon_threadsafe(self.on_message, message.copy())
@@ -155,3 +169,6 @@ class MidiManager:
         if self.output is not None:
             self.output.close()
             self.output = None
+        if self.drum_output is not None:
+            self.drum_output.close()
+            self.drum_output = None

@@ -73,6 +73,8 @@ def snapshot(runtime: MiniStepRuntime) -> dict[str, Any]:
         "status": state.status_message,
         "input": state.selected_input,
         "output": state.selected_output,
+        "drum_output": state.selected_drum_output,
+        "track": state.active_track,
     }
 
 

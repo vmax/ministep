@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import Footer, Header, Static
 
 from .controller import Command, CommandName
+from .drums import DRUM_STEPS, DrumStep
+from .patterns import KIND_LABELS
 from .picker import PatternPicker
 from .runtime import MiniStepRuntime
 from .state import Step, note_name
@@ -36,7 +41,7 @@ LEARNABLE_COMMANDS = (
 class MiniStepApp(App[None]):
     CSS = """
     Screen { layout: vertical; }
-    #summary { height: 6; padding: 0 1; }
+    #summary { height: 7; padding: 0 1; }
     #sequence { height: 1fr; padding: 0 1; }
     #status { height: 2; padding: 0 1; color: $text-muted; }
     #prompt { display: none; }
@@ -63,6 +68,8 @@ class MiniStepApp(App[None]):
         ("l", "load", "Load"),
         ("S", "save_pattern", "Save as"),
         ("L", "load_pattern", "Load pattern"),
+        # Footer label only; the key itself is handled synchronously in on_key.
+        Binding("tab", "switch_track", "Track", priority=True),
         ("q", "quit", "Quit"),
     ]
 
@@ -73,8 +80,10 @@ class MiniStepApp(App[None]):
         self.runtime = runtime
         self.sequence_path = sequence_path
         self._learn_selection: int | None = None
-        # "save" or "load" while the pattern-name prompt is open, else None.
+        # "save" or "load" while the pattern-name prompt is open, else None,
+        # and the pattern kind ("melodic"/"drums") the prompt was opened for.
         self._prompt_mode: str | None = None
+        self._prompt_kind: str | None = None
         self._rendered: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
@@ -99,8 +108,14 @@ class MiniStepApp(App[None]):
         """
         if self._rendered.get(widget_id) == text:
             return
+        try:
+            widget = self.query_one(f"#{widget_id}", Static)
+        except NoMatches:
+            # A key can arrive before compose has mounted the Statics; the
+            # periodic refresh will draw this frame a few milliseconds later.
+            return
         self._rendered[widget_id] = text
-        self.query_one(f"#{widget_id}", Static).update(text)
+        widget.update(text)
 
     def refresh_view(self) -> None:
         state = self.runtime.state
@@ -119,17 +134,24 @@ class MiniStepApp(App[None]):
             "[bold yellow]ROOT? Play MIDI note[/]" if state.root_capture_armed else f"ROOT: {root}"
         )
         loop = "FULL" if state.loop_length is None else str(state.loop_length)
-        self._update(
-            "summary",
-            f"MIDI IN: {state.selected_input or 'not selected'}\n"
-            f"MIDI OUT: {state.selected_output or 'not selected'}\n"
-            f"BPM {state.bpm:g}  |  1/{state.step_division}  |  gate {state.default_gate:.2f}  "
-            f"|  transpose {state.transpose:+d}  |  octave {state.octave:+d}  |  loop {loop}\n"
-            f"{record}  |  {root_status}  |  {status}\n"
-            f"[bold]AUDITION: {last}[/]  |  velocity {last_velocity}  |  Held: {held}  "
-            f"|  Steps: {len(state.sequence)}",
-        )
-        self._update("sequence", self._sequence_grid())
+        drums = state.drums
+        drum_out = state.selected_drum_output or state.selected_output or "not selected"
+        if state.active_track == "drums":
+            summary = self._drum_summary(status)
+        else:
+            summary = (
+                f"MIDI IN: {state.selected_input or 'not selected'}\n"
+                f"MIDI OUT: {state.selected_output or 'not selected'}\n"
+                f"DRUM OUT: {drum_out}  (ch {drums.channel})\n"
+                f"BPM {state.bpm:g}  |  1/{state.step_division}  |  gate {state.default_gate:.2f}  "
+                f"|  transpose {state.transpose:+d}  |  octave {state.octave:+d}  |  loop {loop}\n"
+                f"[bold]TRACK: MELODIC[/]  |  {record}  |  {root_status}  |  {status}\n"
+                f"[bold]AUDITION: {last}[/]  |  velocity {last_velocity}  |  Held: {held}  "
+                f"|  Steps: {len(state.sequence)}"
+            )
+        self._update("summary", summary)
+        grid = self._drum_grid() if state.active_track == "drums" else self._sequence_grid()
+        self._update("sequence", grid)
         if self._learn_selection is not None:
             first = (
                 f"MIDI LEARN: ←/→ {LEARNABLE_COMMANDS[self._learn_selection].name}; "
@@ -139,20 +161,58 @@ class MiniStepApp(App[None]):
             first = self._prompt_help()
         else:
             first = state.status_message
-        self._update(
-            "status",
-            f"{first}\n"
-            "←/→: select  •  ↑/↓: semitone  •  Shift+↑/↓: octave  •  H: hold  "
-            "•  T: set root  •  ,/.: BPM  •  PgUp/PgDn: division  •  K: MIDI Learn  "
-            "•  Shift+S/L: save/load pattern",
+        if state.active_track == "drums":
+            help_line = (
+                "Tab track  •  MIDI key audition  •  Enter commit/toggle  •  R skip step  "
+                "•  Esc drop audition  •  ←/→ step  •  ↑/↓ or 1-4 lane  •  -/+ velocity  "
+                "•  X clear  •  C clear all"
+            )
+        else:
+            help_line = (
+                "Tab: drums  •  ←/→: select  •  ↑/↓: semitone  •  Shift+↑/↓: octave  •  H: hold  "
+                "•  T: set root  •  ,/.: BPM  •  PgUp/PgDn: division  •  K: MIDI Learn  "
+                "•  Shift+S/L: save/load pattern"
+            )
+        self._update("status", f"{first}\n{help_line}")
+
+    def _drum_summary(self, status: str) -> str:
+        """Header for the drum track: only what affects drums, no melodic-only state."""
+        state = self.runtime.state
+        drums = state.drums
+        drum_out = state.selected_drum_output or state.selected_output or "not selected"
+        if drums.audition:
+            parts = []
+            for index in sorted(drums.audition):
+                lane = drums.lanes[index]
+                parts.append(f"{self._lane_label(lane.name)} {note_name(lane.note)}")
+            velocities = ", ".join(str(drums.audition[index]) for index in sorted(drums.audition))
+            audition = f"[bold]AUDITION: {' + '.join(parts)}[/]  |  velocity {velocities}"
+        else:
+            audition = "[bold]AUDITION: --[/]  |  play a drum key, then Enter"
+        lane = drums.cursor_lane_obj
+        hit = drums.cursor
+        cursor = (
+            f"STEP {drums.cursor_step + 1}/{DRUM_STEPS}  |  lane {lane.name} "
+            f"{note_name(lane.note)}  |  hit {'ON' if hit.active else 'off'}  "
+            f"|  velocity {hit.velocity}"
+        )
+        return (
+            f"MIDI IN: {state.selected_input or 'not selected'}\n"
+            f"DRUM OUT: {drum_out}  (ch {drums.channel})\n"
+            f"BPM {state.bpm:g}  |  1/{state.step_division}  |  [bold]TRACK: DRUMS[/]  "
+            f"|  {status}\n"
+            f"{audition}\n"
+            f"{cursor}"
         )
 
     def _prompt_help(self) -> str:
+        label = KIND_LABELS[self._prompt_kind or self.runtime.pattern_kind].upper()
         if self._prompt_mode == "save":
             return (
-                "SAVE AS: type a new name or pick one to overwrite  •  ↑/↓ select  •  Enter  •  Esc"
+                f"SAVE {label} AS: type a new name or pick one to overwrite  "
+                "•  ↑/↓ select  •  Enter  •  Esc"
             )
-        return "LOAD: type to filter  •  ↑/↓ select  •  Enter  •  Esc"
+        return f"LOAD {label}: type to filter  •  ↑/↓ select  •  Enter  •  Esc"
 
     def _sequence_grid(self) -> str:
         steps = self.runtime.state.sequence
@@ -171,6 +231,77 @@ class MiniStepApp(App[None]):
             )
             lines.extend((numbers, values, ""))
         return "\n".join(lines)
+
+    def _drum_grid(self) -> str:
+        """Lane-per-row grid in four beat groups: ``x`` is a hit, ``.`` a silent step.
+
+        Cursor cell: yellow background (strongest). Playback column: green
+        text. Beat starts (1, 5, 9, 13): bold step numbers and ``·`` instead of
+        ``.`` so groups read at a glance without extra colour.
+        """
+        state = self.runtime.state
+        drums = state.drums
+        if not drums.lanes:
+            return "Drum track has no lanes."
+        name_width = max(len(self._lane_label(lane.name)) for lane in drums.lanes) + 2
+        playhead = self.runtime.sequencer.drum_step if self.runtime.sequencer else None
+        playing = state.playing
+
+        def row(cell: Callable[[int], str]) -> str:
+            groups = []
+            for group in range(0, DRUM_STEPS, 4):
+                groups.append("".join(cell(index) for index in range(group, group + 4)))
+            return " [dim]|[/]".join(groups)
+
+        def number(index: int) -> str:
+            text = f"{index + 1:>3}"
+            if playing and index == playhead:
+                return f"[bold green]{text}[/]"
+            return f"[bold]{text}[/]" if index % 4 == 0 else f"[dim]{text}[/]"
+
+        lines = [" " * name_width + row(number)]
+        for lane_index, lane in enumerate(drums.lanes):
+            label = self._lane_label(lane.name)
+            if lane_index == drums.cursor_lane:
+                label = f"[bold yellow]{label:<{name_width}}[/]"
+            else:
+                label = f"{label:<{name_width}}"
+            cells = row(
+                lambda index, lane=lane, lane_index=lane_index: self._render_drum_cell(
+                    lane.steps[index],
+                    index,
+                    selected=lane_index == drums.cursor_lane and index == drums.cursor_step,
+                    playing=playing and index == playhead,
+                    auditioned=lane_index in drums.audition,
+                )
+            )
+            lines.append(f"{label}{cells}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _lane_label(name: str) -> str:
+        words = name.upper().split()
+        if len(words) > 1:
+            # "Closed Hat" -> "CHH", "Open Hat" -> "OHH": initials plus the last word's initial.
+            return "".join(word[0] for word in words) + words[-1][0]
+        return name.upper()[:6]
+
+    @staticmethod
+    def _render_drum_cell(
+        step: DrumStep, index: int, *, selected: bool, playing: bool, auditioned: bool
+    ) -> str:
+        if step.active:
+            mark = "X" if step.velocity >= 115 else "x"
+        else:
+            mark = "·" if index % 4 == 0 else "."
+        if selected and auditioned:
+            mark = "+"  # a pending hit that Enter will write here
+        cell = f"  {mark}"
+        if selected:
+            return f"[bold black on yellow]{cell}[/]"
+        if playing:
+            return f"[bold green]{cell}[/]"
+        return cell
 
     def _render_step(self, step: Step, index: int) -> str:
         value = "--" if step.note is None else note_name(step.note)
@@ -199,7 +330,30 @@ class MiniStepApp(App[None]):
             self._learn_selection = None
             self.runtime.arm_midi_learn(target)
             return
+        if self._drums_active():
+            if self.runtime.state.drums.audition:
+                self.runtime.commit()
+            else:
+                self._drum_toggle_hit()
+            return
         await self.runtime.execute(Command(CommandName.COMMIT))
+
+    async def action_switch_track(self) -> None:
+        """Reached only via the footer click; the key press is consumed in on_key."""
+        self.runtime.state.toggle_track()
+        self.refresh_view()
+
+    def _drums_active(self) -> bool:
+        return self.runtime.state.active_track == "drums"
+
+    def _drum_toggle_hit(self) -> None:
+        drums = self.runtime.state.drums
+        active = drums.toggle_hit()
+        lane = drums.cursor_lane_obj
+        self.runtime.state.status_message = (
+            f"{lane.name} step {drums.cursor_step + 1}: {'hit' if active else 'off'} "
+            f"(velocity {drums.cursor.velocity})."
+        )
 
     async def action_hold(self) -> None:
         await self.runtime.execute(Command(CommandName.HOLD))
@@ -235,6 +389,10 @@ class MiniStepApp(App[None]):
         await self.runtime.execute(Command(CommandName.UNDO))
 
     async def action_clear(self) -> None:
+        if self._drums_active():
+            self.runtime.state.drums.clear()
+            self.runtime.state.status_message = "Drum track cleared."
+            return
         await self.runtime.execute(Command(CommandName.CLEAR))
 
     async def action_restart(self) -> None:
@@ -256,9 +414,10 @@ class MiniStepApp(App[None]):
         self._open_prompt("save")
 
     async def action_load_pattern(self) -> None:
-        if not self.runtime.patterns.list_names():
+        kind = self.runtime.pattern_kind
+        if not self.runtime.patterns.list_names(kind):
             self.runtime.state.status_message = (
-                f"No saved patterns in {self.runtime.patterns.directory}"
+                f"No saved {KIND_LABELS[kind]}s in {self.runtime.patterns.kind_directory(kind)}"
             )
             return
         self._open_prompt("load")
@@ -269,19 +428,25 @@ class MiniStepApp(App[None]):
         return self._prompt_mode is None
 
     def _open_prompt(self, mode: str) -> None:
+        # The kind is fixed when the prompt opens so a Tab mid-prompt (blocked
+        # anyway) could never redirect the save or load to the other track.
+        kind = self.runtime.pattern_kind
         self._prompt_mode = mode
+        self._prompt_kind = kind
+        label = KIND_LABELS[kind]
         picker = self.query_one("#prompt", PatternPicker)
         picker.add_class("active")
         picker.open(
-            self.runtime.patterns.list_names(),
+            self.runtime.patterns.list_names(kind),
             allow_new=mode == "save",
-            placeholder="new pattern name" if mode == "save" else "filter patterns",
+            placeholder=f"save {label} as…" if mode == "save" else f"load {label}: filter",
         )
         self.refresh_bindings()
         self.refresh_view()
 
     def _close_prompt(self) -> None:
         self._prompt_mode = None
+        self._prompt_kind = None
         picker = self.query_one("#prompt", PatternPicker)
         picker.remove_class("active")
         self.set_focus(None)
@@ -289,12 +454,12 @@ class MiniStepApp(App[None]):
         self.refresh_view()
 
     async def on_pattern_picker_picked(self, event: PatternPicker.Picked) -> None:
-        mode = self._prompt_mode
+        mode, kind = self._prompt_mode, self._prompt_kind
         self._close_prompt()
         if mode == "save":
-            self.runtime.save_pattern(event.name)
+            self.runtime.save_pattern(event.name, kind)
         elif mode == "load":
-            await self.runtime.load_pattern(event.name)
+            await self.runtime.load_pattern(event.name, kind)
 
     async def action_quit(self) -> None:
         await self.runtime.shutdown()
@@ -324,6 +489,19 @@ class MiniStepApp(App[None]):
                 return
             event.stop()
             return
+        if key == "tab":
+            # Handled here, synchronously, so a following arrow key can never be
+            # processed before the track has actually switched. Stopping the
+            # event also keeps Textual's default focus cycling away from it.
+            event.prevent_default()
+            event.stop()
+            self.runtime.state.toggle_track()
+            self.refresh_view()
+            return
+        if self._drums_active():
+            if self._on_drum_key(key):
+                event.stop()
+            return
         if key == "left":
             self.runtime.state.move_cursor(-1)
         elif key == "right":
@@ -344,3 +522,34 @@ class MiniStepApp(App[None]):
         else:
             return
         event.stop()
+
+    def _on_drum_key(self, key: str) -> bool:
+        """Drum-track editing keys; return whether ``key`` was consumed."""
+        state = self.runtime.state
+        drums = state.drums
+        if key == "left":
+            drums.move_step(-1)
+        elif key == "right":
+            drums.move_step(1)
+        elif key == "up":
+            drums.move_lane(-1)
+        elif key == "down":
+            drums.move_lane(1)
+        elif key in ("minus", "-"):
+            state.status_message = f"Velocity {drums.adjust_velocity(-10)}."
+        elif key in ("plus", "+", "equals_sign", "="):
+            state.status_message = f"Velocity {drums.adjust_velocity(10)}."
+        elif key in ("x", "delete"):
+            drums.clear_hit()
+            lane = drums.cursor_lane_obj
+            state.status_message = f"{lane.name} step {drums.cursor_step + 1}: off."
+        elif key == "escape":
+            drums.clear_audition()
+            state.status_message = "Audition dropped."
+        elif key.isdigit() and 1 <= int(key) <= len(drums.lanes):
+            drums.cursor_lane = int(key) - 1
+            lane = drums.cursor_lane_obj
+            state.status_message = f"Lane {lane.name} ({note_name(lane.note)})."
+        else:
+            return False
+        return True

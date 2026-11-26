@@ -26,6 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", help="MIDI input name (exact or unambiguous partial match)")
     parser.add_argument("--output", help="MIDI output name (exact or unambiguous partial match)")
     parser.add_argument(
+        "--drum-output",
+        help="MIDI output for the drum track (e.g. an IAC bus into Ableton); "
+        "default: same port as --output",
+    )
+    parser.add_argument(
         "--list-midi", action="store_true", help="List MIDI input and output ports, then exit"
     )
     parser.add_argument("--load", type=Path, help="Load a JSON sequence on startup")
@@ -133,11 +138,19 @@ async def run(args: argparse.Namespace) -> int:
     try:
         selected_input = choose_port("input", args.input, inputs)
         selected_output = choose_port("output", args.output, outputs)
+        # Drums never prompt: without --drum-output they follow the melodic port.
+        selected_drum_output = (
+            choose_port("drum output", args.drum_output, outputs) if args.drum_output else None
+        )
     except ValueError as error:
         print(f"ministep: {error}", file=sys.stderr)
         return 2
 
-    state = AppState(selected_input=selected_input, selected_output=selected_output)
+    state = AppState(
+        selected_input=selected_input,
+        selected_output=selected_output,
+        selected_drum_output=selected_drum_output,
+    )
     if args.load is not None:
         try:
             state.load(args.load)
@@ -178,6 +191,12 @@ async def run(args: argparse.Namespace) -> int:
     manager = MidiManager(loop, receive)
     try:
         output = manager.open_output(selected_output) if selected_output else None
+        drum_output = None
+        if selected_drum_output and output is not None:
+            drum_output = manager.open_drum_output(selected_drum_output)
+        elif selected_drum_output:
+            print("ministep: --drum-output needs a melodic --output too.", file=sys.stderr)
+            return 2
         mapping: SimpleMapping | None = None
         if args.mapping == "minilab3":
             try:
@@ -213,6 +232,7 @@ async def run(args: argparse.Namespace) -> int:
             DEFAULT_MIDI_MAPPING_PATH,
             control_pages=profile.page_names if profile is not None else (),
             timing_log=args.timing_log,
+            drum_output=drum_output,
         )
         if selected_input:
             manager.open_input(selected_input)

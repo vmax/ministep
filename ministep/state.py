@@ -6,6 +6,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .drums import DrumTrack
+from .notes import NOTE_NAMES, note_name, parse_note_name  # noqa: F401  (re-exported)
+
 
 @dataclass
 class Step:
@@ -55,6 +58,12 @@ class AppState:
     cursor: int = 0
     root_capture_armed: bool = False
     status_message: str = "Ready: audition a note, then commit it."
+    # Drum track: shares bpm/division/transport with the melodic steps above.
+    drums: DrumTrack = field(default_factory=DrumTrack.default)
+    # Runtime port for drums; None means "same port as the melodic output".
+    selected_drum_output: str | None = None
+    # Which track the TUI edits: "melodic" or "drums". UI state, never persisted.
+    active_track: str = "melodic"
 
     def __post_init__(self) -> None:
         self.set_step_division(self.step_division)
@@ -238,6 +247,11 @@ class AppState:
         )
         return True
 
+    def toggle_track(self) -> str:
+        self.active_track = "drums" if self.active_track == "melodic" else "melodic"
+        self.status_message = f"Editing {self.active_track} track."
+        return self.active_track
+
     def set_last_note(self, note: int, velocity: int) -> None:
         self.last_note_played = (note, velocity)
 
@@ -253,13 +267,33 @@ class AppState:
         else:
             self.held_notes[note] = count - 1
 
-    # Persisted pattern format. Additive changes keep the version; only a change
-    # that old readers cannot interpret bumps it.
-    FORMAT_VERSION = 1
+    # Persisted formats.
+    #
+    # Whole-session snapshot (``sequence.json``, ``--load``, remote SAVE/LOAD):
+    #   v1: flat melodic pattern (bpm, steps, ... at top level).
+    #   v2: bpm/step_division at top level, melodic settings under "melodic",
+    #       drum lanes under "drums". v1 files still load with empty drums.
+    # Named track patterns (Shift+S / Shift+L) are one track each and carry no
+    # transport: ``melodic_to_dict`` / ``apply_melodic`` and
+    # ``DrumTrack.to_dict`` / ``apply_drums`` (see ``patterns.py``).
+    FORMAT_VERSION = 2
+    TRACK_FORMAT_VERSION = 1
     STEP_FIELDS = frozenset(Step.__dataclass_fields__)
 
+    def melodic_to_dict(self) -> dict[str, Any]:
+        """The melodic track's musical state: no transport, ports, or UI positions."""
+        return {
+            "loop_length": self.loop_length,
+            "default_gate": self.default_gate,
+            "default_velocity": self.default_velocity,
+            "transpose": self.transpose,
+            "octave": self.octave,
+            "output_channel": self.output_channel,
+            "steps": [asdict(step) for step in self.sequence],
+        }
+
     def to_dict(self, name: str | None = None) -> dict[str, Any]:
-        """Serialise the musical pattern only: no MIDI ports, transport, or UI state."""
+        """Serialise both tracks plus tempo: no MIDI ports, transport position, or UI state."""
         data: dict[str, Any] = {"version": self.FORMAT_VERSION}
         if name is not None:
             data["name"] = name
@@ -267,51 +301,85 @@ class AppState:
             {
                 "bpm": self.bpm,
                 "step_division": self.step_division,
-                "loop_length": self.loop_length,
-                "default_gate": self.default_gate,
-                "default_velocity": self.default_velocity,
-                "transpose": self.transpose,
-                "octave": self.octave,
-                "output_channel": self.output_channel,
-                "steps": [asdict(step) for step in self.sequence],
+                "melodic": self.melodic_to_dict(),
+                "drums": self.drums.to_dict(),
             }
         )
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AppState:
-        """Build a state from pattern JSON.
+        """Build a state from snapshot JSON (version 1 or 2).
 
         Unknown keys are ignored and missing optional keys take defaults, so
-        files written by slightly newer or older builds still load. Anything
-        structurally wrong raises ``ValueError`` with a readable message.
+        files written by slightly newer or older builds still load. A v1 file
+        yields the same melodic state as before plus an empty default drum
+        track. Anything structurally wrong raises ``ValueError`` with a
+        readable message.
         """
         if not isinstance(data, dict):
             raise ValueError("Pattern file must contain a JSON object")
         version = data.get("version", 1)
-        if version != cls.FORMAT_VERSION:
+        if version == 1:
+            melodic: Any = data
+            drums: Any = None
+        elif version == cls.FORMAT_VERSION:
+            melodic = data.get("melodic", {})
+            drums = data.get("drums")
+        else:
             raise ValueError(
-                f"Unsupported pattern version {version!r} (this MiniStep reads version "
+                f"Unsupported pattern version {version!r} (this MiniStep reads versions 1 and "
                 f"{cls.FORMAT_VERSION})"
             )
         try:
             state = cls(
                 bpm=float(data.get("bpm", 128)),
                 step_division=int(data.get("step_division", 16)),
-                loop_length=data.get("loop_length"),
-                default_gate=float(data.get("default_gate", 0.5)),
-                default_velocity=int(data.get("default_velocity", 100)),
-                transpose=int(data.get("transpose", 0)),
-                octave=int(data.get("octave", 0)),
-                output_channel=int(data.get("output_channel", 1)),
             )
-            raw_steps = data.get("steps", [])
-            if not isinstance(raw_steps, list):
-                raise ValueError("steps must be a list")
-            state.sequence = [cls._step_from_dict(raw) for raw in raw_steps]
+            state.apply_melodic(melodic)
+            if drums is not None:
+                state.drums = DrumTrack.from_dict(drums)
         except (TypeError, ValueError) as error:
             raise ValueError(f"Invalid pattern data: {error}") from error
         return state
+
+    def apply_melodic(self, section: Any) -> None:
+        """Replace the melodic track from a ``melodic_to_dict`` section.
+
+        Tempo, drums, ports, and the active track are untouched. The section is
+        parsed completely before anything is written, so a bad file leaves the
+        current melody intact. Raises ``ValueError`` on structural problems.
+        """
+        if not isinstance(section, dict):
+            raise ValueError("melodic pattern must be an object")
+        try:
+            parsed = AppState(
+                loop_length=section.get("loop_length"),
+                default_gate=float(section.get("default_gate", 0.5)),
+                default_velocity=int(section.get("default_velocity", 100)),
+                transpose=int(section.get("transpose", 0)),
+                octave=int(section.get("octave", 0)),
+                output_channel=int(section.get("output_channel", 1)),
+            )
+            raw_steps = section.get("steps", [])
+            if not isinstance(raw_steps, list):
+                raise ValueError("steps must be a list")
+            parsed.sequence = [self._step_from_dict(raw) for raw in raw_steps]
+        except TypeError as error:
+            raise ValueError(str(error)) from error
+        self.sequence = parsed.sequence
+        self.loop_length = parsed.loop_length
+        self.default_gate = parsed.default_gate
+        self.default_velocity = parsed.default_velocity
+        self.transpose = parsed.transpose
+        self.octave = parsed.octave
+        self.output_channel = parsed.output_channel
+        self.cursor = 0
+        self.playhead = 0
+
+    def apply_drums(self, section: Any) -> None:
+        """Replace the drum track from a ``DrumTrack.to_dict`` section; melody untouched."""
+        self.drums.replace_content(DrumTrack.from_dict(section))
 
     @classmethod
     def _step_from_dict(cls, raw: Any) -> Step:
@@ -329,9 +397,11 @@ class AppState:
         it survives. Transport and edit positions reset because the old ones no
         longer refer to anything meaningful.
         """
-        selected_input, selected_output = self.selected_input, self.selected_output
+        ports = (self.selected_input, self.selected_output, self.selected_drum_output)
+        active_track = self.active_track
         self.__dict__.update(loaded.__dict__)
-        self.selected_input, self.selected_output = selected_input, selected_output
+        self.selected_input, self.selected_output, self.selected_drum_output = ports
+        self.active_track = active_track
 
     def save(self, path: Path) -> None:
         from .patterns import write_json_atomic
@@ -346,12 +416,4 @@ class AppState:
         self.status_message = f"Loaded {len(self.sequence)} steps from {path}."
 
 
-NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 PLAYBACK_DIVISIONS = (4, 8, 16, 32)
-
-
-def note_name(note: int) -> str:
-    """Return an Ableton Live-style note name (MIDI 60 is C3)."""
-    if not 0 <= note <= 127:
-        raise ValueError("MIDI note must be between 0 and 127")
-    return f"{NOTE_NAMES[note % 12]}{note // 12 - 2}"
