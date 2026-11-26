@@ -130,7 +130,9 @@ pub fn extract_section(kind: PatternKind, data: &Value, source: &str) -> Result<
     if let Some(file_type) = obj.get("type").filter(|t| !t.is_null()) {
         let parsed = file_type.as_str().and_then(PatternKind::parse);
         let Some(file_kind) = parsed else {
-            return Err(PatternError(format!("{source}: unknown pattern type {file_type}")));
+            // Python repr: strings in single quotes, like the original message.
+            let shown = file_type.as_str().map_or_else(|| file_type.to_string(), |s| format!("'{s}'"));
+            return Err(PatternError(format!("{source}: unknown pattern type {shown}")));
         };
         if file_kind != kind {
             return Err(PatternError(format!("{source} is a {}, not a {}", file_kind.label(), kind.label())));
