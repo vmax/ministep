@@ -24,7 +24,7 @@ impl App {
         }
         let first = self.page * STEPS_PER_PAGE;
 
-        let grid_left = rect.left() + GUTTER;
+        let grid_left = rect.left() + if melodic { GUTTER } else { DRUM_GUTTER };
         let loop_w = LOOP_PILL_WIDTH;
         let grid_right = rect.right() - 8.0;
         let cell_gap = CELL_GAP;
@@ -80,8 +80,14 @@ impl App {
             }
         }
 
-        // Cells.
         let cells_top = ruler_y + 34.0;
+        if !melodic {
+            let area = Rect::from_min_max(pos2(rect.left(), cells_top), pos2(grid_right, rect.bottom()));
+            self.drum_grid(ui, &painter, s, area, grid_left, cell_w, ruler_y);
+            return;
+        }
+
+        // Cells.
         let cell_h = (cell_w * 1.05).clamp(CELL_MIN_HEIGHT, CELL_MAX_HEIGHT);
         let row = Rect::from_min_max(pos2(grid_left, cells_top), pos2(grid_right, cells_top + cell_h));
         let vel_top = row.bottom() + 22.0;
@@ -91,13 +97,7 @@ impl App {
 
         // Audition / commit dot in the gutter.
         let dot = pos2(rect.left() + 20.0, row.center().y);
-        let pending: Option<String> = if melodic {
-            s.last_note_played.map(|(n, _)| note_name(n))
-        } else if !s.drums.audition.is_empty() {
-            Some(s.drums.audition.keys().filter_map(|&i| s.drums.lanes.get(i)).map(|l| l.name.chars().next().unwrap_or('?')).collect())
-        } else {
-            None
-        };
+        let pending = s.last_note_played.map(|(n, _)| note_name(n));
         let dot_rect = Rect::from_center_size(dot, vec2(40.0, 40.0));
         let dresp = ui.interact(dot_rect, ui.scope_id().with("commitdot"), Sense::click());
         let armed = pending.is_some();
@@ -116,29 +116,14 @@ impl App {
             (c >= 0.0 && (c as usize) < STEPS_PER_PAGE).then_some(c as usize)
         };
 
-        if melodic {
-            self.melodic_cells(ui, &painter, s, first, row, cell_w, &cell_x, &row_resp, &col_at);
-        } else if let Sel::Lane(lane) = self.sel {
-            self.drum_cells(ui, &painter, s, lane, row, cell_w, &cell_x, &row_resp, &col_at);
-        }
+        self.melodic_cells(ui, &painter, s, first, row, cell_w, &cell_x, &row_resp, &col_at);
 
         // Velocity lane.
         for col in 0..STEPS_PER_PAGE {
             let r = Rect::from_min_size(pos2(cell_x(col), vel_row.top()), vec2(cell_w, vel_h));
             painter.rect_filled(r, 8.0, p.well.gamma_multiply(0.55));
-            let (vel, on) = if melodic {
-                match s.sequence.get(first + col) {
-                    Some(st) => (st.velocity, st.note.is_some()),
-                    None => continue,
-                }
-            } else if let Sel::Lane(lane) = self.sel {
-                match s.drums.lanes.get(lane) {
-                    Some(l) => (l.steps[col].velocity, l.steps[col].active),
-                    None => continue,
-                }
-            } else {
-                continue;
-            };
+            let Some(st) = s.sequence.get(first + col) else { continue };
+            let (vel, on) = (st.velocity, st.note.is_some());
             let h = (vel_h - 16.0) * f32::from(vel) / 127.0;
             let x = r.left() + cell_w * 0.35;
             let shown_h = if on { h } else { h.min(16.0) };
@@ -148,17 +133,9 @@ impl App {
             && let Some(pos) = vel_resp.interact_pointer_pos()
                 && let Some(col) = col_at(pos) {
                     let v = (((vel_row.bottom() - 8.0 - pos.y) / (vel_h - 16.0)) * 127.0).clamp(1.0, 127.0) as u8;
-                    let sel = self.sel;
-                    self.engine.edit(|st| match sel {
-                        Sel::Melodic => {
-                            if let Some(step) = st.sequence.get_mut(first + col) {
-                                step.velocity = v;
-                            }
-                        }
-                        Sel::Lane(l) => {
-                            if let Some(lane) = st.drums.lanes.get_mut(l) {
-                                lane.steps[col].velocity = v;
-                            }
+                    self.engine.edit(|st| {
+                        if let Some(step) = st.sequence.get_mut(first + col) {
+                            step.velocity = v;
                         }
                     });
                 }
@@ -168,8 +145,8 @@ impl App {
 
         // Playhead: an orange line through ruler, cells and velocity.
         if s.playing {
-            let pos = if melodic { s.playhead } else { s.drum_playhead };
-            if melodic && (pos < first || pos >= first + STEPS_PER_PAGE) {
+            let pos = s.playhead;
+            if pos < first || pos >= first + STEPS_PER_PAGE {
                 return;
             }
             let x = cell_x(pos - first) - cell_gap * 0.5 + 1.0;
@@ -299,54 +276,156 @@ impl App {
         }
     }
 
+    /// All drum lanes as one drum-machine grid: a row per lane, labels on the left,
+    /// velocity of the focused lane below, one playhead through every row.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn drum_cells(
-        &mut self,
-        ui: &mut Ui,
-        painter: &egui::Painter,
-        s: &AppState,
-        lane: usize,
-        row: Rect,
-        cell_w: f32,
-        cell_x: &dyn Fn(usize) -> f32,
-        resp: &egui::Response,
-        col_at: &dyn Fn(Pos2) -> Option<usize>,
-    ) {
+    pub(super) fn drum_grid(&mut self, ui: &mut Ui, painter: &egui::Painter, s: &AppState, area: Rect, grid_left: f32, cell_w: f32, ruler_y: f32) {
         let p = self.pal();
-        let Some(l) = s.drums.lanes.get(lane) else { return };
-        for (col, step) in l.steps.iter().enumerate() {
-            let r = Rect::from_min_size(pos2(cell_x(col), row.top()), vec2(cell_w, row.height()));
-            let hovered = resp.hover_pos().is_some_and(|h| r.contains(h));
-            let on = step.active;
-            painter.rect_filled(r, CELL_RADIUS, if on { p.ink } else if hovered { p.well_hover } else { p.well });
-            if s.drums.cursor_step == col && s.drums.cursor_lane == lane && ui.ctx().memory(|m| m.focused().is_none()) {
-                painter.rect_stroke(r.expand(3.0), 12.0, Stroke::new(2.0, p.accent.gamma_multiply(0.7)), StrokeKind::Outside);
+        let lanes = &s.drums.lanes;
+        if lanes.is_empty() {
+            return;
+        }
+        let focus = match self.sel {
+            Sel::Lane(i) => i.min(lanes.len() - 1),
+            Sel::Melodic => 0,
+        };
+        let geo = drum_rows(area.height(), lanes.len());
+        let (row_h, vel_h) = (geo.row, geo.vel);
+        let pitch = row_h + geo.gap;
+        let cell_x = |col: usize| grid_left + col as f32 * (cell_w + CELL_GAP);
+        let row_y = |i: usize| area.top() + i as f32 * pitch;
+        let rows = Rect::from_min_max(pos2(grid_left, area.top()), pos2(area.right(), row_y(lanes.len()) - geo.gap));
+        let radius = (row_h * 0.25).clamp(3.0, CELL_RADIUS);
+        let playing_col = s.playing.then_some(s.drum_playhead);
+
+        // Lane labels: click to focus; a dot marks an auditioned (uncommitted) hit.
+        for (i, lane) in lanes.iter().enumerate() {
+            let label = Rect::from_min_max(pos2(area.left(), row_y(i)), pos2(grid_left - 10.0, row_y(i) + row_h));
+            let resp = ui.interact(label, ui.scope_id().with(("lane_label", i)), Sense::click());
+            let focused = i == focus;
+            if focused {
+                painter.rect_filled(Rect::from_min_size(label.min, vec2(3.0, label.height())), 1.5, p.ink);
+            }
+            let size = row_h.clamp(11.0, 15.0);
+            painter.text(pos2(label.left() + 10.0, label.center().y), Align2::LEFT_CENTER, lane.name.to_lowercase(), sans(size), if focused { p.ink } else { p.muted });
+            if s.drums.audition.contains_key(&i) {
+                painter.circle_filled(pos2(label.right() - 4.0, label.center().y), 3.5, p.ink);
+            }
+            if resp.on_hover_text(format!("{} · {} — click to focus", lane.name, note_name(lane.note))).clicked() {
+                self.select(Sel::Lane(i));
             }
         }
-        // Paint mode: the first cell decides on/off for the whole drag.
-        let paint_id = ui.scope_id().with("drum_paint");
-        if let Some(pos) = resp.interact_pointer_pos()
-            && let Some(col) = col_at(pos) {
-                if resp.drag_started() || resp.clicked() {
-                    let target = !l.steps[col].active;
-                    ui.data_mut(|d| d.insert_temp(paint_id, target));
-                }
-                let target: Option<bool> = ui.data(|d| d.get_temp(paint_id));
-                if (resp.dragged() || resp.clicked() || resp.drag_started()) && let Some(target) = target {
-                    let changed = l.steps[col].active != target;
-                    self.engine.edit(|st| {
-                        st.drums.cursor_step = col;
-                        if let Some(l) = st.drums.lanes.get_mut(lane) {
-                            l.steps[col].active = target;
-                        }
-                    });
-                    if changed && target && !s.playing {
-                        self.engine.audition_lane(lane, l.steps[col].velocity);
+
+        // Cells.
+        for (i, lane) in lanes.iter().enumerate() {
+            for (col, step) in lane.steps.iter().enumerate() {
+                let r = Rect::from_min_size(pos2(cell_x(col), row_y(i)), vec2(cell_w, row_h));
+                let fill = if step.active {
+                    if playing_col == Some(col) {
+                        p.accent
+                    } else {
+                        // Softer hits read lighter, like LED brightness.
+                        p.ink.gamma_multiply(0.45 + 0.55 * f32::from(step.velocity) / 127.0)
                     }
+                } else if i == focus {
+                    p.well_hover
+                } else {
+                    p.well
+                };
+                painter.rect_filled(r, radius, fill);
+                if !step.active && col % 4 == 0 {
+                    painter.circle_filled(r.center(), 1.6, p.faint);
                 }
             }
+        }
+        // Keyboard cursor.
+        if s.drums.cursor_lane < lanes.len() {
+            let r = Rect::from_min_size(pos2(cell_x(s.drums.cursor_step), row_y(s.drums.cursor_lane)), vec2(cell_w, row_h));
+            painter.rect_stroke(r.expand(2.0), radius + 2.0, Stroke::new(1.5, p.accent.gamma_multiply(0.8)), StrokeKind::Outside);
+        }
+
+        // Click toggles; dragging paints across steps and lanes with the first cell's new state.
+        let resp = ui.interact(rows, ui.scope_id().with("drum_grid"), Sense::click_and_drag());
+        let cell_at = |pos: Pos2| -> Option<(usize, usize)> {
+            let col = ((pos.x - grid_left) / (cell_w + CELL_GAP)).floor();
+            let row = ((pos.y - area.top()) / pitch).floor();
+            (col >= 0.0 && (col as usize) < DRUM_STEPS && row >= 0.0 && (row as usize) < lanes.len()).then_some((row as usize, col as usize))
+        };
+        let paint_id = ui.scope_id().with("drum_paint");
+        if let Some((row, col)) = resp.interact_pointer_pos().and_then(cell_at) {
+            if resp.drag_started() || resp.clicked() {
+                ui.data_mut(|d| d.insert_temp(paint_id, !lanes[row].steps[col].active));
+                if row != focus {
+                    self.select(Sel::Lane(row));
+                }
+            }
+            let target: Option<bool> = ui.data(|d| d.get_temp(paint_id));
+            if (resp.dragged() || resp.clicked() || resp.drag_started())
+                && let Some(target) = target
+                && lanes[row].steps[col].active != target
+            {
+                self.engine.edit(|st| {
+                    st.drums.cursor_lane = row;
+                    st.drums.cursor_step = col;
+                    if let Some(l) = st.drums.lanes.get_mut(row) {
+                        l.steps[col].active = target;
+                    }
+                });
+                if target && !s.playing {
+                    self.engine.audition_lane(row, lanes[row].steps[col].velocity);
+                }
+            }
+        }
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+
+        // Velocity of the focused lane.
+        let vel_top = rows.bottom() + DRUM_VEL_GAP;
+        let vel_row = Rect::from_min_max(pos2(grid_left, vel_top), pos2(area.right(), vel_top + vel_h));
+        painter.text(pos2(area.left() + 10.0, vel_row.center().y - 8.0), Align2::LEFT_CENTER, "VEL", sans(13.0), p.muted);
+        painter.text(pos2(area.left() + 10.0, vel_row.center().y + 9.0), Align2::LEFT_CENTER, lanes[focus].name.to_lowercase(), sans(11.0), p.faint);
+        for (col, step) in lanes[focus].steps.iter().enumerate() {
+            let r = Rect::from_min_size(pos2(cell_x(col), vel_row.top()), vec2(cell_w, vel_h));
+            painter.rect_filled(r, 6.0, p.well.gamma_multiply(0.55));
+            let h = (vel_h - 12.0) * f32::from(step.velocity) / 127.0;
+            let x = r.left() + cell_w * 0.35;
+            let shown = if step.active { h } else { h.min(10.0) };
+            painter.line_segment([pos2(x, r.bottom() - 6.0), pos2(x, r.bottom() - 6.0 - shown)], Stroke::new(if step.active { 4.0 } else { 2.0 }, if step.active { p.ink } else { p.faint }));
+        }
+        let vresp = ui.interact(vel_row, ui.scope_id().with("drum_vel"), Sense::click_and_drag());
+        if (vresp.dragged() || vresp.clicked())
+            && let Some(pos) = vresp.interact_pointer_pos()
+        {
+            let col = ((pos.x - grid_left) / (cell_w + CELL_GAP)).floor();
+            if col >= 0.0 && (col as usize) < DRUM_STEPS {
+                let v = (((vel_row.bottom() - 6.0 - pos.y) / (vel_h - 12.0)) * 127.0).clamp(1.0, 127.0) as u8;
+                self.engine.edit(|st| {
+                    if let Some(l) = st.drums.lanes.get_mut(focus) {
+                        l.steps[col as usize].velocity = v;
+                    }
+                });
+            }
+        }
+        if vresp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+
+        // Commit dot (auditioned hits) in the ruler gutter.
+        if !s.drums.audition.is_empty() {
+            let dot = pos2(area.left() + 16.0, ruler_y + 10.0);
+            let dresp = ui.interact(Rect::from_center_size(dot, vec2(28.0, 28.0)), ui.scope_id().with("drum_commit"), Sense::click());
+            painter.circle_filled(dot, 7.0, if s.recording { p.accent } else { p.ink });
+            if dresp.on_hover_text("Commit the auditioned hits (Enter)").clicked() {
+                self.engine.commit();
+            }
+        }
+
+        // Playhead through every row.
+        if let Some(col) = playing_col {
+            let x = cell_x(col) - CELL_GAP * 0.5 + 1.0;
+            painter.vline(x, (ruler_y + 2.0)..=vel_row.bottom(), Stroke::new(2.5, p.accent));
+            painter.circle_filled(pos2(x, ruler_y + 2.0), 4.0, p.accent);
         }
     }
 

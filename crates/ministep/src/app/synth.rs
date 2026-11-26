@@ -32,7 +32,8 @@ impl App {
                 )
             }
         };
-        paint_icon(&painter, Rect::from_min_size(pos2(rect.left(), rect.top() + 2.0), vec2(30.0, 24.0)), Icon::Wave, p.ink);
+        let icon = if self.sel == Sel::Melodic { Icon::Wave } else { Icon::Grid };
+        paint_icon(&painter, Rect::from_min_size(pos2(rect.left(), rect.top() + 2.0), vec2(30.0, 24.0)), icon, p.ink);
         painter.text(pos2(rect.left() + 42.0, rect.top() + 14.0), Align2::LEFT_CENTER, &title, sans(20.0), p.ink);
         let prev = Rect::from_center_size(pos2(rect.left() + 222.0, rect.top() + 14.0), vec2(28.0, 28.0));
         let next = Rect::from_center_size(pos2(rect.left() + 258.0, rect.top() + 14.0), vec2(28.0, 28.0));

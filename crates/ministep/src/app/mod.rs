@@ -7,9 +7,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use eframe::egui::{self, Align2, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use eframe::egui::{self, Align2, Color32, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use ministep_core::controller::{Command, CommandName};
-use ministep_core::drums::DrumLane;
+use ministep_core::drums::{DRUM_STEPS, DrumLane};
 use ministep_core::engine::Engine;
 use ministep_core::notes::note_name;
 use ministep_core::patterns::PatternKind;
