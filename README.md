@@ -49,6 +49,7 @@ MiniStep is written in Rust with a native egui window in a hardware style: trans
 - **Clocked playback.** Internal monotonic timing on an anchored grid plays the sequence at a selectable BPM, 1/4, 1/8, 1/16, or 1/32 division, with a global gate. Late wake-ups never shift the transport; see `docs/TIMING.md`. Pass `--timing-log PATH` to append timing summaries whenever playback stops.
 - **Non-destructive loop spans.** Choose `FULL → 8 → 16 → 32 → 64`; selecting `16`, for example, loops the first 16 stored steps without truncating later ones.
 - **Drum track.** A second, 16-step track with Kick, Snare, Closed Hat, and Open Hat lanes fires short MIDI notes (40 ms) on its own channel and, optionally, its own output port such as an IAC bus into an Ableton Drum Rack. Both tracks run from one clock, so they cannot drift apart. `Tab` switches the editor between tracks. Drums follow the same audition → commit → step workflow as notes: play `C1`/`D1`/`F#1`/`A#1` on the keyboard to hear a lane, then `Enter` writes the played hits (with their velocities) into the current step and moves on.
+- **Built-in drum synth.** Every drum lane has its own synthesized voice — kick, snare, closed/open hat (closed chokes open), clap, tom, rim, cowbell, cymbal — with TUNE, DECAY, TONE, a model-specific fourth knob (PUNCH, SNAP, METAL, SPREAD, SWEEP, DETUNE) and LEVEL. No samples: every hit is computed. Hits are placed on their exact audio sample (measured through a loopback device: ±3 samples, no drift), so the drums sound as tight as the MIDI clock. Drums can go to the synth, to MIDI, or both (`synth / both / midi` in the drum panel, or `--drum-engine`). Without `--drum-output` the synth is the default.
 - **Persistence.** Load JSON at startup and save/load the default sequence from the app. Named patterns are per track: `Shift+S`/`Shift+L` save and load melodic patterns on the melodic track and drum patterns on the drum track, each in its own directory, so loading a new melody never changes the beat and vice versa. Older combined pattern files still load.
 - **MIDI-safe pass-through.** Notes from live input and sequencer playback are ownership-tracked, so one source's Note Off does not cut off the other source's same-pitch note.
 
@@ -311,6 +312,7 @@ The Cargo workspace:
 - `crates/ministep-midi` — CoreMIDI ports via `midir`, including the virtual **MiniStep Out** source, plus the end-to-end timing bench.
 - `crates/ministep-remote` — the NDJSON Unix-socket server.
 - `crates/ministep-minilab` — MiniLab 3 OLED and pad SysEx.
+- `crates/ministep-drumsynth` — the built-in drum synth: voice models, a mixer that places hits sample-accurately, and the CoreAudio output (via `cpal`).
 - `crates/ministep` — the egui app and CLI.
 
 The transport thread runs with a Mach time-constraint policy and waits for each deadline in three stages (wakeable wait, `mach_wait_until`, short spin). See `docs/TIMING.md` for measurements against the Python build.
@@ -328,7 +330,7 @@ The tests cover the Python suite's behaviour (state, persistence, patterns, drum
 ## Limitations and roadmap
 
 - macOS-first: the documented virtual-routing path uses the IAC Driver.
-- MIDI only: no audio processing and no live-performance timing capture.
+- Audio is drums only: melodic notes are MIDI, played by your synth. No live-performance timing capture.
 - Playback uses MiniStep's internal clock; external MIDI clock is not implemented.
 - MiniLab OLED/RGB support depends on its named ports and empirically derived SysEx behaviour.
 

@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 
 use crate::jsonx::{as_i64, get_i64, truthy};
 use crate::notes::{note_name, parse_note_name};
+use crate::voice::VoiceParams;
 
 pub const DRUM_STEPS: usize = 16;
 pub const DEFAULT_DRUM_VELOCITY: u8 = 100;
@@ -29,20 +30,23 @@ impl Default for DrumStep {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DrumLane {
     pub name: String,
     pub note: u8,
     pub steps: [DrumStep; DRUM_STEPS],
+    /// Built-in synth voice. Saved only when it differs from the note's default.
+    pub voice: VoiceParams,
 }
 
 impl DrumLane {
     pub fn new(name: impl Into<String>, note: u8) -> Self {
-        Self { name: name.into(), note: note.min(127), steps: [DrumStep::default(); DRUM_STEPS] }
+        let note = note.min(127);
+        Self { name: name.into(), note, steps: [DrumStep::default(); DRUM_STEPS], voice: VoiceParams::for_note(note) }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DrumTrack {
     pub lanes: Vec<DrumLane>,
     /// One-based MIDI channel.
@@ -166,11 +170,17 @@ impl DrumTrack {
             .lanes
             .iter()
             .map(|lane| {
-                json!({
+                let mut v = json!({
                     "name": lane.name,
                     "note": note_name(lane.note),
                     "steps": lane.steps.iter().map(|s| json!({"active": s.active, "velocity": s.velocity})).collect::<Vec<_>>(),
-                })
+                });
+                // Optional: files from builds without the synth (and the Python
+                // build) stay byte-identical when the voice is untouched.
+                if lane.voice != VoiceParams::for_note(lane.note) {
+                    v["synth"] = lane.voice.to_json();
+                }
+                v
             })
             .collect();
         let mut map = Map::new();
@@ -220,7 +230,8 @@ impl DrumTrack {
                 Some(Value::Null) | None => note_name(note),
                 Some(other) => other.to_string(),
             };
-            lanes.push(DrumLane { name, note, steps });
+            let voice = lane_obj.get("synth").map_or(VoiceParams::for_note(note), |v| VoiceParams::from_json(v, note));
+            lanes.push(DrumLane { name, note, steps, voice });
         }
         let mut track = Self::with_lanes(lanes);
         track.channel = get_i64(obj, "channel", i64::from(DEFAULT_DRUM_CHANNEL))?.clamp(1, 16) as u8;

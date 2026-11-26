@@ -15,6 +15,7 @@ pub mod rt;
 pub mod state;
 pub mod timing;
 pub mod transport;
+pub mod voice;
 
 pub use controller::{Command, CommandName, Mapping};
 pub use engine::{Engine, EngineConfig, EngineEvent};
@@ -22,3 +23,4 @@ pub use message::MidiMessage;
 pub use output::{OwnedOutput, Owner, RawMidiOut, SharedOutput};
 pub use state::{AppState, Step, Track};
 pub use transport::{Outputs, Transport};
+pub use voice::{DrumRoute, DrumVoiceSink, VoiceModel, VoiceParams};

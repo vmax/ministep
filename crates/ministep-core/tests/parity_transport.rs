@@ -337,7 +337,7 @@ fn realtime_sixteenths_at_180_bpm_hold_the_grid() {
         timing_log: Some(log.clone()),
         ..Default::default()
     };
-    let engine = Engine::new(st, Outputs { melodic: Some(rec.output()), drums: None }, config);
+    let engine = Engine::new(st, Outputs { synth: None, melodic: Some(rec.output()), drums: None }, config);
     engine.play();
     std::thread::sleep(std::time::Duration::from_secs(10));
     engine.stop();

@@ -20,7 +20,7 @@ impl Sim {
     fn new(s: AppState, separate_drums: bool) -> Self {
         let mel = Recorder::default();
         let drum = Recorder::default();
-        let outs = Outputs { melodic: Some(mel.output()), drums: separate_drums.then(|| drum.output()) };
+        let outs = Outputs { synth: None, melodic: Some(mel.output()), drums: separate_drums.then(|| drum.output()) };
         Self { t: Transport::default(), s, outs, mel, drum, now: 100.0 }
     }
 

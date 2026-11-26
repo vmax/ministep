@@ -70,7 +70,7 @@ fn main() {
         let _ = std::fs::remove_file(&log);
         let engine = Engine::new(
             state,
-            Outputs { melodic: Some(Arc::clone(&out)), drums: None },
+            Outputs { synth: None, melodic: Some(Arc::clone(&out)), drums: None },
             EngineConfig { timing_log: Some(log.clone()), spin_margin: margin, realtime, ..EngineConfig::default() },
         );
         arrivals.lock().clear();

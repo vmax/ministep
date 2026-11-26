@@ -66,3 +66,18 @@ fn legacy_flat_v1_loads_melodic_only() {
     assert_eq!(v1.bpm, 120.0);
     assert!(!v1.drums.has_hits());
 }
+
+#[test]
+fn drum_voice_params_round_trip_and_stay_optional() {
+    use ministep_core::drums::DrumTrack;
+    use ministep_core::voice::{VoiceModel, VoiceParams};
+    let mut t = DrumTrack::default();
+    // Untouched voices are not written, so older readers see the same file.
+    assert!(!serde_json::to_string(&t.to_json()).unwrap().contains("synth"));
+    t.lanes[1].voice.model = VoiceModel::Clap;
+    t.lanes[1].voice.decay = 0.25;
+    let back = DrumTrack::from_json(&serde_json::Value::Object(t.to_json())).unwrap();
+    assert_eq!(back.lanes[1].voice.model, VoiceModel::Clap);
+    assert!((back.lanes[1].voice.decay - 0.25).abs() < 1e-6);
+    assert_eq!(back.lanes[0].voice, VoiceParams::for_note(36));
+}

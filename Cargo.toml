@@ -12,6 +12,7 @@ ministep-core = { path = "crates/ministep-core" }
 ministep-midi = { path = "crates/ministep-midi" }
 ministep-remote = { path = "crates/ministep-remote" }
 ministep-minilab = { path = "crates/ministep-minilab" }
+ministep-drumsynth = { path = "crates/ministep-drumsynth" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"

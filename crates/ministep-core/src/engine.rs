@@ -275,11 +275,37 @@ impl Engine {
     pub fn set_outputs(&self, outputs: Outputs, melodic_name: Option<String>, drum_name: Option<String>) {
         self.stop();
         self.shared.outs.read().all_notes_off();
-        *self.shared.outs.write() = outputs;
+        let synth = self.shared.outs.read().synth.clone();
+        *self.shared.outs.write() = Outputs { synth: outputs.synth.or(synth), ..outputs };
         self.edit(|s| {
             s.selected_output = melodic_name;
             s.selected_drum_output = drum_name;
         });
+    }
+
+    /// Attach (or detach) the built-in drum synth.
+    pub fn set_drum_synth(&self, synth: Option<Arc<dyn crate::voice::DrumVoiceSink>>) {
+        self.shared.outs.write().synth = synth;
+        self.changed();
+    }
+
+    pub fn set_drum_route(&self, route: crate::voice::DrumRoute) {
+        if self.state().playing {
+            // Drop hanging MIDI drum notes when MIDI leaves the route.
+            self.shared.transport.lock().release_drums(&self.shared.outs.read());
+        }
+        self.edit(|s| s.drum_route = route);
+    }
+
+    /// Play a drum lane's synth voice now (GUI preview).
+    pub fn audition_lane(&self, lane: usize, velocity: u8) {
+        let (voice, route) = {
+            let s = self.state();
+            (s.drums.lanes.get(lane).map(|l| l.voice), s.drum_route)
+        };
+        if let (Some(voice), Some(synth), true) = (voice, self.shared.outs.read().synth.clone(), route.synth()) {
+            synth.trigger(monotonic(), voice, velocity);
+        }
     }
 
     pub fn set_profile(&self, profile: Option<ProfileRouter>) {
@@ -708,8 +734,13 @@ impl Engine {
                 && state.drums.lane_for_note(note).is_some() {
                     let channel = state.drums.channel - 1;
                     let sink = outs.drum_sink();
+                    let route = state.drum_route;
+                    let sink = sink.filter(|_| route.midi());
                     if let MidiMessage::NoteOn { velocity, .. } = message.clone().filter_press() {
                         let lane = state.drums.audition_note(note, velocity);
+                        if let (Some(synth), Some(l), true) = (&outs.synth, lane, route.synth()) {
+                            synth.trigger(monotonic(), state.drums.lanes[l].voice, velocity);
+                        }
                         if let Some(sink) = sink {
                             sink.lock().note_on(note, velocity, channel, Owner::Input);
                         }

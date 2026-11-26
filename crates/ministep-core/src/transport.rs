@@ -26,6 +26,8 @@ pub struct Outputs {
     pub melodic: Option<SharedOutput>,
     /// `None`: drums share the melodic port.
     pub drums: Option<SharedOutput>,
+    /// Built-in drum synth, used when the state's `drum_route` includes it.
+    pub synth: Option<std::sync::Arc<dyn crate::voice::DrumVoiceSink>>,
 }
 
 impl Outputs {
@@ -156,6 +158,15 @@ impl Transport {
         }
     }
 
+    /// Send every pending drum note-off now.
+    pub fn release_drums(&mut self, outs: &Outputs) {
+        let (drums, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending).into_iter().partition(|p| p.drums);
+        self.pending = rest;
+        for off in drums {
+            Self::send_off(outs, off);
+        }
+    }
+
     fn release_tie(&mut self, outs: &Outputs) {
         if let Some((note, channel)) = self.active_tie.take()
             && let Some(m) = &outs.melodic {
@@ -209,6 +220,18 @@ impl Transport {
     }
 
     fn fire_drums(&mut self, window: &StepWindow, state: &AppState, outs: &Outputs) {
+        let route = state.drum_route;
+        if route.synth()
+            && let Some(synth) = &outs.synth {
+                // Scheduled at the grid time, not "now": the audio engine places
+                // it sample-accurately, so wake-up lateness never reaches the sound.
+                for (lane, hit) in state.drums.hits_at(state.drum_playhead) {
+                    synth.trigger(window.start, lane.voice, hit.velocity);
+                }
+            }
+        if !route.midi() {
+            return;
+        }
         let Some(sink) = outs.drum_sink() else { return };
         let channel = state.drums.channel.saturating_sub(1);
         let mut sink = sink.lock();

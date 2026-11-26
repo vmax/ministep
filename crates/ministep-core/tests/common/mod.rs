@@ -66,7 +66,7 @@ impl Sim {
     pub fn new(s: AppState, separate_drums: bool) -> Self {
         let mel = Recorder::default();
         let drum = Recorder::default();
-        let outs = Outputs { melodic: Some(mel.output()), drums: separate_drums.then(|| drum.output()) };
+        let outs = Outputs { synth: None, melodic: Some(mel.output()), drums: separate_drums.then(|| drum.output()) };
         Self {
             t: Transport::default(),
             s,
@@ -173,7 +173,7 @@ impl Default for EngineOpts {
 pub fn engine(state: AppState, dir: &Path, opts: EngineOpts) -> TestEngine {
     let mel = Recorder::default();
     let drum = Recorder::default();
-    let outs = Outputs { melodic: opts.melodic.then(|| mel.output()), drums: opts.drums.then(|| drum.output()) };
+    let outs = Outputs { synth: None, melodic: opts.melodic.then(|| mel.output()), drums: opts.drums.then(|| drum.output()) };
     let profile = opts.profile.map(|p| ministep_core::engine::ProfileRouter::new(p, mel.output()));
     let config = EngineConfig {
         patterns: PatternStore::new(dir.join("patterns")),

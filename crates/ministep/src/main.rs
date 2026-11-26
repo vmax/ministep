@@ -51,6 +51,15 @@ struct Args {
     /// Unix socket for remote control (NDJSON); default ~/.config/ministep/control.sock.
     #[arg(long)]
     remote_socket: Option<PathBuf>,
+    /// Where drum hits go: built-in synth, MIDI, or both. Default: synth, or MIDI with --drum-output.
+    #[arg(long, value_parser = ["synth", "midi", "both"])]
+    drum_engine: Option<String>,
+    /// Audio output for the drum synth (default: system output).
+    #[arg(long)]
+    audio_device: Option<String>,
+    /// List audio outputs and exit.
+    #[arg(long)]
+    list_audio: bool,
     /// Append a transport timing summary to this file each time playback stops.
     #[arg(long)]
     timing_log: Option<PathBuf>,
@@ -64,6 +73,11 @@ fn pick(kind: &str, query: Option<&str>, ports: &[String]) -> Result<Option<Stri
 }
 
 fn run(args: Args) -> Result<(), String> {
+    if args.list_audio {
+        println!("Audio outputs:");
+        ministep_drumsynth::output_devices().iter().for_each(|d| println!("  {d}"));
+        return Ok(());
+    }
     let (inputs, outputs) = (ministep_midi::input_ports(), ministep_midi::output_ports());
     if args.list_midi {
         println!("MIDI inputs:");
@@ -77,6 +91,11 @@ fn run(args: Args) -> Result<(), String> {
     let drum_output = pick("drum output", args.drum_output.as_deref(), &outputs)?;
 
     let mut state = AppState::default();
+    let route = args.drum_engine.as_deref().and_then(ministep_core::voice::DrumRoute::parse).unwrap_or(if drum_output.is_some() {
+        ministep_core::voice::DrumRoute::Midi
+    } else {
+        ministep_core::voice::DrumRoute::Synth
+    });
     if let Some(path) = &args.load {
         state.load(path).map_err(|e| format!("cannot load {}: {e}", path.display()))?;
     }
@@ -95,6 +114,19 @@ fn run(args: Args) -> Result<(), String> {
             ..EngineConfig::default()
         },
     );
+    let audio = match ministep_drumsynth::start(args.audio_device.as_deref()) {
+        Ok((output, sink)) => {
+            engine.set_drum_synth(Some(sink));
+            Some(output)
+        }
+        Err(e) => {
+            eprintln!("ministep: drum synth unavailable ({e}); drums go to MIDI");
+            None
+        }
+    };
+    let route = if audio.is_none() && route.synth() { ministep_core::voice::DrumRoute::Midi } else { route };
+    engine.edit(|s| s.drum_route = route);
+    let audio_label = audio.as_ref().map(|a| format!("{} · {} Hz · {:.1} ms", a.device, a.sample_rate, a.latency_ms));
     let mut ports = ports::Ports::default();
     ports.refresh();
     ports.set_outputs(&engine, Some(&output), drum_output.as_deref())?;
@@ -138,9 +170,14 @@ fn run(args: Args) -> Result<(), String> {
     let result = eframe::run_native(
         "MiniStep",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, engine_for_app, ports, profile_path)))),
+        Box::new(move |cc| {
+            let mut app = app::App::new(cc, engine_for_app, ports, profile_path);
+            app.audio_device = audio_label;
+            Ok(Box::new(app))
+        }),
     );
     engine.shutdown();
+    drop(audio);
     result.map_err(|e| e.to_string())
 }
 

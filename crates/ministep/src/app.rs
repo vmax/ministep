@@ -15,6 +15,7 @@ use ministep_core::notes::note_name;
 use ministep_core::patterns::PatternKind;
 use ministep_core::profiles::PageKind;
 use ministep_core::state::{AppState, LOOP_LENGTHS, Track};
+use ministep_core::voice::{DrumRoute, VoiceModel, VoiceParams};
 
 use crate::ports::Ports;
 use crate::theme::{self, DARK, LIGHT, Palette, mono, sans};
@@ -67,6 +68,10 @@ pub struct App {
     bpm_edit: Option<String>,
     note_drag: f32,
     last_cursor: usize,
+    /// Cached waveform preview: (params, peaks per column).
+    preview: Option<(VoiceParams, Vec<f32>)>,
+    /// Name of the audio device the drum synth plays on, if running.
+    pub audio_device: Option<String>,
 }
 
 impl App {
@@ -92,6 +97,8 @@ impl App {
             bpm_edit: None,
             note_drag: 0.0,
             last_cursor: 0,
+            preview: None,
+            audio_device: None,
         }
     }
 
@@ -655,12 +662,16 @@ impl App {
                 }
                 let target: Option<bool> = ui.data(|d| d.get_temp(paint_id));
                 if (resp.dragged() || resp.clicked() || resp.drag_started()) && let Some(target) = target {
+                    let changed = l.steps[col].active != target;
                     self.engine.edit(|st| {
                         st.drums.cursor_step = col;
                         if let Some(l) = st.drums.lanes.get_mut(lane) {
                             l.steps[col].active = target;
                         }
                     });
+                    if changed && target && !s.playing {
+                        self.engine.audition_lane(lane, l.steps[col].velocity);
+                    }
                 }
             }
         if resp.hovered() {
@@ -893,9 +904,119 @@ impl App {
         let card = Rect::from_min_max(pos2(rect.left(), rect.top() + 26.0), pos2(rect.left() + 300.0, rect.bottom() - 10.0));
         self.track_card(ui, card, s);
         let groups = Rect::from_min_max(pos2(card.right() + 56.0, rect.top() + 26.0), pos2(rect.right(), rect.bottom()));
-        if !self.synth_groups(ui, groups, false) {
+        if let Sel::Lane(lane) = self.sel {
+            self.voice_panel(ui, groups, s, lane);
+        } else if !self.synth_groups(ui, groups, false) {
             self.no_profile_hint(ui, groups);
         }
+    }
+
+    /// The built-in drum synth voice of one lane: model, waveform, five knobs, routing.
+    fn voice_panel(&mut self, ui: &mut Ui, rect: Rect, s: &AppState, lane: usize) {
+        let p = self.pal();
+        let painter = ui.painter().clone();
+        let Some(voice) = s.drums.lanes.get(lane).map(|l| l.voice) else { return };
+        let set_voice = |engine: &Engine, f: &dyn Fn(&mut VoiceParams)| {
+            engine.edit(|st| {
+                if let Some(l) = st.drums.lanes.get_mut(lane) {
+                    f(&mut l.voice);
+                }
+            });
+        };
+
+        // Header: section name + route switch.
+        heading(&painter, rect.min, "Drum synth", p);
+        let routes = [(DrumRoute::Synth, "synth"), (DrumRoute::Both, "both"), (DrumRoute::Midi, "midi")];
+        let rw = 70.0;
+        let rx = rect.right() - routes.len() as f32 * (rw + 4.0);
+        for (i, (route, label)) in routes.iter().enumerate() {
+            let r = Rect::from_min_size(pos2(rx + i as f32 * (rw + 4.0), rect.top() - 8.0), vec2(rw, 32.0));
+            if text_pill(ui, r, p, s.drum_route == *route, label, 14.0).on_hover_text("Where drum hits go: built-in synth, MIDI, or both").clicked() {
+                self.engine.set_drum_route(*route);
+            }
+        }
+        if let Some(dev) = &self.audio_device {
+            painter.text(pos2(rx - 14.0, rect.top() + 8.0), Align2::RIGHT_CENTER, format!("♪ {dev}"), mono(12.0), p.faint);
+        } else if s.drum_route.synth() {
+            painter.text(pos2(rx - 14.0, rect.top() + 8.0), Align2::RIGHT_CENTER, "no audio output", mono(12.0), p.accent);
+        }
+
+        // Model chips.
+        let chip_w = 62.0;
+        let chips_top = rect.top() + 34.0;
+        for (i, model) in VoiceModel::ALL.iter().enumerate() {
+            let col = i % 3;
+            let row = i / 3;
+            let r = Rect::from_min_size(pos2(rect.left() + col as f32 * (chip_w + 6.0), chips_top + row as f32 * 40.0), vec2(chip_w, 34.0));
+            if text_pill(ui, r, p, voice.model == *model, model.label(), 12.5).clicked() && voice.model != *model {
+                let m = *model;
+                set_voice(&self.engine, &|v| {
+                    let level = v.level;
+                    *v = VoiceParams { level, ..VoiceParams::new(m) };
+                });
+                self.engine.audition_lane(lane, 110);
+            }
+        }
+
+        // Waveform preview (click to play).
+        let wave = Rect::from_min_size(pos2(rect.left() + 3.0 * (chip_w + 6.0) + 18.0, chips_top), vec2(300.0, 114.0));
+        let wresp = ui.interact(wave, ui.scope_id().with(("wave", lane)), Sense::click());
+        painter.rect_filled(wave, 12.0, if wresp.hovered() { p.well_hover } else { p.well });
+        let peaks = self.peaks(voice, (wave.width() - 24.0) as usize);
+        let mid = wave.center().y;
+        let h = wave.height() * 0.42;
+        for (i, pk) in peaks.iter().enumerate() {
+            let x = wave.left() + 12.0 + i as f32;
+            painter.vline(x, (mid - pk * h)..=(mid + pk * h), Stroke::new(1.0, p.ink));
+        }
+        if wresp.on_hover_text("Play this voice").clicked() {
+            self.engine.audition_lane(lane, 110);
+        }
+
+        // Knobs.
+        let knob_w = 104.0;
+        let kx = wave.right() + 36.0;
+        painter.vline(kx - 18.0, (rect.top() + 30.0)..=(rect.top() + 230.0), Stroke::new(1.0, p.line));
+        for i in 0..5 {
+            if kx + (i as f32 + 1.0) * knob_w > rect.right() + 20.0 {
+                break;
+            }
+            let r = Rect::from_min_size(pos2(kx + i as f32 * knob_w, rect.top() + 34.0), vec2(knob_w - 18.0, knob_w + 30.0));
+            let mut value = (voice.knob(i) * 127.0).round() as u8;
+            let default = (VoiceParams::new(voice.model).knob(i) * 127.0).round() as u8;
+            let label = voice.knob_label(i);
+            if (Knob { value: &mut value, default, label, display: voice.knob_display(i), bold_arc: i == 1 }).show(ui, r, p) {
+                let v = f32::from(value) / 127.0;
+                set_voice(&self.engine, &|vp| vp.set_knob(i, v));
+            }
+            // Releasing a knob plays the result.
+            if ui.input(|inp| inp.pointer.any_released()) && r.contains(ui.input(|inp| inp.pointer.interact_pos().unwrap_or_default())) && !s.playing {
+                self.engine.audition_lane(lane, 110);
+            }
+        }
+    }
+
+    /// Peak envelope of a rendered hit, one value per column (cached).
+    fn peaks(&mut self, voice: VoiceParams, columns: usize) -> Vec<f32> {
+        if let Some((cached, peaks)) = &self.preview
+            && *cached == voice && peaks.len() == columns {
+                return peaks.clone();
+            }
+        let sr = 16_000.0;
+        let samples = ministep_drumsynth::render(voice, 110, sr, 1.5);
+        let columns = columns.max(1);
+        // Fixed time scale (1.5 s across) so decay changes are visible.
+        let per = ((1.5 * sr) as usize / columns).max(1);
+        let mut peaks: Vec<f32> = (0..columns)
+            .map(|c| samples.iter().skip(c * per).take(per).fold(0.0f32, |m, v| m.max(v.abs())))
+            .collect();
+        let max = peaks.iter().cloned().fold(0.0f32, f32::max).max(1e-6);
+        let norm = (1.0 / max).min(4.0);
+        for pk in &mut peaks {
+            *pk = (*pk * norm).min(1.0).sqrt();
+        }
+        self.preview = Some((voice, peaks.clone()));
+        peaks
     }
 
     fn no_profile_hint(&mut self, ui: &mut Ui, rect: Rect) {

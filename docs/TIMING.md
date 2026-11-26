@@ -210,3 +210,20 @@ End to end (engine → CoreMIDI → a virtual destination in the same process,
 The remaining ~0.1 ms is CoreMIDI delivery, not the engine (engine wake
 lateness max 0.003–0.006 ms). The GUI renders on its own thread and cannot
 delay the transport; it only takes the state lock briefly once per frame.
+
+## Drum synth timing
+
+The built-in drum synth (`crates/ministep-drumsynth`) does not play a hit when
+the transport thread wakes; it plays it at the grid time the transport hands
+it. The mixer keeps a smoothed map from its sample counter to monotonic time
+(a running mean at first, then a slow average that only follows the drift
+between the audio and system clocks), and starts each hit on the frame for
+`grid time + latency`. With a 128-frame block at 48 kHz the latency is a
+constant ~7 ms, which nobody hears; what matters is that it is constant.
+
+Measured (Nov 2026): the app played a kick every 1/8 at 150 BPM into
+BlackHole; `ffmpeg` recorded it, and an onset detector found 35 hits over
+6.8 s with every interval within ±3 samples (±0.06 ms) of 9600 and zero
+cumulative drift. The ±3 includes the detector's own threshold quantisation.
+`tests/synth.rs` checks the same property offline with ±1.5 ms of simulated
+callback jitter (±2 frames).

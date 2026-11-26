@@ -74,7 +74,7 @@ impl Ports {
         self.melodic = m;
         self.drums = d;
         engine.set_outputs(
-            Outputs { melodic: self.melodic.as_ref().map(|x| Arc::clone(&x.1)), drums: self.drums.as_ref().map(|x| Arc::clone(&x.1)) },
+            Outputs { synth: None, melodic: self.melodic.as_ref().map(|x| Arc::clone(&x.1)), drums: self.drums.as_ref().map(|x| Arc::clone(&x.1)) },
             self.melodic.as_ref().map(|x| x.0.clone()),
             self.drums.as_ref().map(|x| x.0.clone()),
         );

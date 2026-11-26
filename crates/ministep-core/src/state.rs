@@ -121,6 +121,8 @@ pub struct AppState {
     pub status_message: String,
     pub drums: DrumTrack,
     pub active_track: Track,
+    /// Where drum hits go: built-in synth, MIDI, or both. Session routing, not saved.
+    pub drum_route: crate::voice::DrumRoute,
 }
 
 impl Default for AppState {
@@ -149,6 +151,7 @@ impl Default for AppState {
             status_message: "Ready: audition a note, then commit it.".into(),
             drums: DrumTrack::default(),
             active_track: Track::Melodic,
+            drum_route: crate::voice::DrumRoute::default(),
         }
     }
 }
@@ -486,7 +489,9 @@ impl AppState {
     pub fn adopt(&mut self, loaded: AppState) {
         let ports = (self.selected_input.take(), self.selected_output.take(), self.selected_drum_output.take());
         let active = self.active_track;
+        let route = self.drum_route;
         *self = loaded;
+        self.drum_route = route;
         (self.selected_input, self.selected_output, self.selected_drum_output) = ports;
         self.active_track = active;
     }
