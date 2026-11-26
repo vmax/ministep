@@ -1,0 +1,288 @@
+{
+  "version": 1,
+  "type": "drums",
+  "name": "Electro beat",
+  "channel": 11,
+  "lanes": [
+    {
+      "name": "Kick",
+      "note": "C1",
+      "steps": [
+        {
+          "active": true,
+          "velocity": 117
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        }
+      ]
+    },
+    {
+      "name": "Snare",
+      "note": "D1",
+      "steps": [
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        }
+      ]
+    },
+    {
+      "name": "Closed Hat",
+      "note": "F#1",
+      "steps": [
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        }
+      ]
+    },
+    {
+      "name": "Open Hat",
+      "note": "A#1",
+      "steps": [
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": false,
+          "velocity": 100
+        },
+        {
+          "active": true,
+          "velocity": 100
+        }
+      ]
+    }
+  ]
+}

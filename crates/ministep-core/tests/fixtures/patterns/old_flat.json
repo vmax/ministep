@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "old",
+  "bpm": 120.0,
+  "step_division": 16,
+  "loop_length": null,
+  "default_gate": 0.5,
+  "default_velocity": 100,
+  "transpose": 0,
+  "octave": 0,
+  "output_channel": 1,
+  "steps": [
+    {
+      "note": 48,
+      "velocity": 100,
+      "gate": 0.5,
+      "enabled": true,
+      "tie": false,
+      "accent": false
+    },
+    {
+      "note": null
+    }
+  ]
+}

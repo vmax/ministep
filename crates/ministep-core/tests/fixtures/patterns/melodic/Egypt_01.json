@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "type": "melodic",
+  "name": "Egypt 01",
+  "loop_length": 16,
+  "default_gate": 0.25,
+  "default_velocity": 100,
+  "transpose": -3,
+  "octave": 1,
+  "output_channel": 2,
+  "steps": [
+    {
+      "note": 60,
+      "velocity": 101,
+      "gate": 0.25,
+      "enabled": true,
+      "tie": false,
+      "accent": false
+    },
+    {
+      "note": null,
+      "velocity": 100,
+      "gate": 0.25,
+      "enabled": true,
+      "tie": false,
+      "accent": true
+    },
+    {
+      "note": 63,
+      "velocity": 90,
+      "gate": 0.25,
+      "enabled": true,
+      "tie": true,
+      "accent": false
+    },
+    {
+      "note": 63,
+      "velocity": 90,
+      "gate": 1.0,
+      "enabled": true,
+      "tie": false,
+      "accent": false
+    },
+    {
+      "note": 67,
+      "velocity": 127,
+      "gate": 0.25,
+      "enabled": true,
+      "tie": false,
+      "accent": false
+    }
+  ]
+}

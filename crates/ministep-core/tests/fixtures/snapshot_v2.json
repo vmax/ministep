@@ -1,0 +1,340 @@
+{
+  "version": 2,
+  "bpm": 133.5,
+  "step_division": 8,
+  "melodic": {
+    "loop_length": 16,
+    "default_gate": 0.25,
+    "default_velocity": 100,
+    "transpose": -3,
+    "octave": 1,
+    "output_channel": 2,
+    "steps": [
+      {
+        "note": 60,
+        "velocity": 101,
+        "gate": 0.25,
+        "enabled": true,
+        "tie": false,
+        "accent": false
+      },
+      {
+        "note": null,
+        "velocity": 100,
+        "gate": 0.25,
+        "enabled": true,
+        "tie": false,
+        "accent": true
+      },
+      {
+        "note": 63,
+        "velocity": 90,
+        "gate": 0.25,
+        "enabled": true,
+        "tie": true,
+        "accent": false
+      },
+      {
+        "note": 63,
+        "velocity": 90,
+        "gate": 1.0,
+        "enabled": true,
+        "tie": false,
+        "accent": false
+      },
+      {
+        "note": 67,
+        "velocity": 127,
+        "gate": 0.25,
+        "enabled": true,
+        "tie": false,
+        "accent": false
+      }
+    ]
+  },
+  "drums": {
+    "channel": 11,
+    "lanes": [
+      {
+        "name": "Kick",
+        "note": "C1",
+        "steps": [
+          {
+            "active": true,
+            "velocity": 117
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          }
+        ]
+      },
+      {
+        "name": "Snare",
+        "note": "D1",
+        "steps": [
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          }
+        ]
+      },
+      {
+        "name": "Closed Hat",
+        "note": "F#1",
+        "steps": [
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          }
+        ]
+      },
+      {
+        "name": "Open Hat",
+        "note": "A#1",
+        "steps": [
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": false,
+            "velocity": 100
+          },
+          {
+            "active": true,
+            "velocity": 100
+          }
+        ]
+      }
+    ]
+  }
+}

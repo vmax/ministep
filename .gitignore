@@ -13,3 +13,6 @@ build/
 
 # Editorial cut (built separately, not part of the package)
 press/
+
+# Rust
+/target/
