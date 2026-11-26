@@ -467,6 +467,12 @@ dependencies = [
 [[package]]
 name = "ministep-minilab"
 version = "0.2.0"
+dependencies = [
+ "crossbeam-channel",
+ "ministep-core",
+ "ministep-midi",
+ "tempfile",
+]
 
 [[package]]
 name = "ministep-remote"

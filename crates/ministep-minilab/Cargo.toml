@@ -1,7 +1,14 @@
 [package]
 name = "ministep-minilab"
+description = "Arturia MiniLab 3 OLED and pad-colour display for MiniStep"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ministep-core = { workspace = true }
+ministep-midi = { workspace = true }
+crossbeam-channel = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
