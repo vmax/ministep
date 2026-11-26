@@ -76,14 +76,23 @@ pub fn apply_visuals(ctx: &egui::Context, p: &Palette, dark: bool) {
     v.panel_fill = p.bg;
     v.window_fill = p.bg;
     v.extreme_bg_color = p.well;
-    v.override_text_color = Some(p.ink);
+    // Text colour follows each widget state (no global override: an override
+    // also paints ink text onto ink fills, e.g. a pressed row or a filled button).
     v.selection.bg_fill = p.accent_soft;
-    v.selection.stroke = egui::Stroke::new(1.0, p.accent);
-    v.widgets.inactive.weak_bg_fill = p.well;
-    v.widgets.inactive.bg_fill = p.well;
-    v.widgets.hovered.weak_bg_fill = p.well_hover;
-    v.widgets.hovered.bg_fill = p.well_hover;
-    v.widgets.active.weak_bg_fill = p.ink;
+    v.selection.stroke = egui::Stroke::new(1.0, p.ink);
+    let w = &mut v.widgets;
+    w.noninteractive.fg_stroke.color = p.ink;
+    w.inactive.fg_stroke.color = p.ink;
+    w.inactive.weak_bg_fill = p.well;
+    w.inactive.bg_fill = p.well;
+    w.hovered.fg_stroke.color = p.ink;
+    w.hovered.weak_bg_fill = p.well_hover;
+    w.hovered.bg_fill = p.well_hover;
+    w.active.fg_stroke.color = p.on_ink;
+    w.active.weak_bg_fill = p.ink;
+    w.active.bg_fill = p.ink;
+    w.open.fg_stroke.color = p.ink;
+    w.open.weak_bg_fill = p.well_hover;
     v.window_stroke = egui::Stroke::new(1.0, p.line);
     v.window_corner_radius = 14.into();
     ctx.set_visuals(v);

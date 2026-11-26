@@ -53,7 +53,7 @@ impl App {
             });
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                let go = ui.add(egui::Button::new(egui::RichText::new(if dlg.save { "Save" } else { "Load" }).size(16.0)).fill(p.ink).corner_radius(16.0).min_size(vec2(90.0, 34.0)));
+                let go = ui.add(egui::Button::new(egui::RichText::new(if dlg.save { "Save" } else { "Load" }).size(16.0).color(p.on_ink)).fill(p.ink).corner_radius(16.0).min_size(vec2(90.0, 34.0)));
                 let go = go.clicked() || ui.input(|i| i.key_pressed(Key::Enter));
                 if go {
                     let name = if !dlg.save && !matches.is_empty() && !matches.iter().any(|m| **m == dlg.name) { matches[0].clone() } else { dlg.name.clone() };
