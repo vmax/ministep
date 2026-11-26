@@ -1,3 +1,124 @@
+//! MiniStep: hardware-style MIDI step sequencer.
+
+mod app;
+mod ports;
+mod theme;
+mod widgets;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use clap::Parser;
+use eframe::egui;
+use ministep_core::controller::{Mapping, default_mapping_path};
+use ministep_core::engine::{Engine, EngineConfig};
+use ministep_core::state::AppState;
+use ministep_core::transport::Outputs;
+
+#[derive(Parser, Debug)]
+#[command(name = "ministep", version, about = "MiniStep MIDI step recorder/sequencer")]
+struct Args {
+    /// MIDI input (exact or unambiguous partial match).
+    #[arg(long)]
+    input: Option<String>,
+    /// MIDI output (exact or unambiguous partial match). Default: virtual "MiniStep Out".
+    #[arg(long)]
+    output: Option<String>,
+    /// MIDI output for the drum track; default: same as --output.
+    #[arg(long)]
+    drum_output: Option<String>,
+    /// List MIDI ports and exit.
+    #[arg(long)]
+    list_midi: bool,
+    /// Load a JSON sequence on startup.
+    #[arg(long)]
+    load: Option<PathBuf>,
+    /// Enable persisted MIDI Learn mappings.
+    #[arg(long, value_parser = ["none", "minilab3"], default_value = "none")]
+    mapping: String,
+    /// YAML synth-control profile (the synth panel).
+    #[arg(long)]
+    profile: Option<PathBuf>,
+    /// MIDI output for profile CCs; overrides the profile's `output`.
+    #[arg(long)]
+    control_output: Option<String>,
+    /// Append a transport timing summary to this file each time playback stops.
+    #[arg(long)]
+    timing_log: Option<PathBuf>,
+}
+
+fn pick(kind: &str, query: Option<&str>, ports: &[String]) -> Result<Option<String>, String> {
+    match query {
+        None => Ok(None),
+        Some(q) => ministep_midi::find_port(q, ports).map(Some).ok_or(format!("No unambiguous {kind} port matches {q:?}")),
+    }
+}
+
+fn run(args: Args) -> Result<(), String> {
+    let (inputs, outputs) = (ministep_midi::input_ports(), ministep_midi::output_ports());
+    if args.list_midi {
+        println!("MIDI inputs:");
+        inputs.iter().for_each(|p| println!("  {p}"));
+        println!("MIDI outputs:");
+        outputs.iter().for_each(|p| println!("  {p}"));
+        return Ok(());
+    }
+    let input = pick("input", args.input.as_deref(), &inputs)?;
+    let output = pick("output", args.output.as_deref(), &outputs)?.unwrap_or_else(|| ports::VIRTUAL_LABEL.into());
+    let drum_output = pick("drum output", args.drum_output.as_deref(), &outputs)?;
+
+    let mut state = AppState::default();
+    if let Some(path) = &args.load {
+        state.load(path).map_err(|e| format!("cannot load {}: {e}", path.display()))?;
+    }
+    let mapping = (args.mapping == "minilab3")
+        .then(|| Mapping::load_or_default(&default_mapping_path()))
+        .transpose()
+        .map_err(|e| format!("cannot load MIDI mapping: {e}"))?;
+    let engine = Engine::new(
+        state,
+        Outputs::default(),
+        EngineConfig {
+            timing_log: args.timing_log.clone(),
+            mapping,
+            mapping_path: Some(default_mapping_path()),
+            ..EngineConfig::default()
+        },
+    );
+    let mut ports = ports::Ports::default();
+    ports.refresh();
+    ports.set_outputs(&engine, Some(&output), drum_output.as_deref())?;
+    ports.set_input(&engine, input.as_deref())?;
+    if let Some(path) = &args.profile {
+        let profile = ministep_core::profiles::load_profile(path).map_err(|e| format!("cannot load control profile: {e}"))?;
+        let router = ports.router_for(profile, args.control_output.as_deref())?;
+        engine.set_profile(Some(router));
+    }
+    engine.edit(|s| s.status_message = "Ready: audition a note, then commit it.".into());
+    let engine_for_app = Arc::clone(&engine);
+    let profile_path = args.profile.clone();
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("MiniStep")
+            .with_inner_size([1680.0, 960.0])
+            .with_min_inner_size([1280.0, 820.0])
+            .with_fullsize_content_view(true)
+            .with_title_shown(false)
+            .with_titlebar_shown(false),
+        ..Default::default()
+    };
+    let result = eframe::run_native(
+        "MiniStep",
+        options,
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, engine_for_app, ports, profile_path)))),
+    );
+    engine.shutdown();
+    result.map_err(|e| e.to_string())
+}
+
 fn main() {
-    println!("Hello, world!");
+    if let Err(e) = run(Args::parse()) {
+        eprintln!("ministep: {e}");
+        std::process::exit(2);
+    }
 }

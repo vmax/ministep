@@ -1,0 +1,23 @@
+# Generic synth profile: General MIDI / MPE-style sound controllers that most
+# soft synths respond to out of the box (or after one MIDI-learn click).
+# min/max/unit/default only change how the GUI shows a knob; the synth always
+# receives the raw 0..127 CC value.
+name: Generic synth
+channel: 1
+pages:
+  OSC:
+    knobs:
+      1: { cc: 70, label: TUNE, min: -12, max: 12, unit: st, default: 64 }
+      2: { cc: 76, label: SUB, min: -24, max: 0, unit: st, default: 64 }
+      3: { cc: 77, label: MIX, min: 0, max: 100, unit: "%", default: 99 }
+  FILTER:
+    knobs:
+      1: { cc: 74, label: CUTOFF, min: 20, max: 12000, unit: Hz, default: 70 }
+      2: { cc: 71, label: RES, min: 0, max: 100, unit: "%", default: 30 }
+  ENV (AMP):
+    kind: envelope
+    knobs:
+      1: { cc: 73, label: ATTACK, min: 0, max: 2000, unit: ms, default: 3 }
+      2: { cc: 75, label: DECAY, min: 0, max: 2000, unit: ms, default: 12 }
+      3: { cc: 79, label: SUSTAIN, min: 0, max: 100, unit: "%", default: 92 }
+      4: { cc: 72, label: RELEASE, min: 0, max: 2000, unit: ms, default: 14 }

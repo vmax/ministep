@@ -1,7 +1,16 @@
 [package]
 name = "ministep"
+description = "MiniStep: a tactile MIDI step sequencer with a hardware-style macOS GUI"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+default-run = "ministep"
 
 [dependencies]
+ministep-core = { workspace = true }
+ministep-midi = { workspace = true }
+eframe = { workspace = true }
+clap = { workspace = true }
+parking_lot = { workspace = true }
+serde_json = { workspace = true }
+rfd = "0.15"
