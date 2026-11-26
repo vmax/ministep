@@ -157,8 +157,8 @@ impl MiniLab3Display {
 
     /// Show an engine event (the `receive()` display logic of the Python app).
     ///
-    /// `Command` events carry no source CC, so they render as a text screen and
-    /// only when they have a value (see crate docs).
+    /// Learned commands show like Python did: through `handle_message` with the
+    /// source CC, so only knob-like controls take over the screen.
     pub fn show_event(&mut self, event: &EngineEvent) {
         match event {
             EngineEvent::Menu(screen) => match screen {
@@ -168,8 +168,9 @@ impl MiniLab3Display {
             EngineEvent::Knob { page, label, value } => {
                 let _ = self.show_encoder(&format!("{page} {label}"), *value, None);
             }
-            EngineEvent::Command { label, value: Some(value) } => self.show_text(label, value),
-            EngineEvent::Command { value: None, .. } => {}
+            EngineEvent::Command { label, value, source } => {
+                self.handle_message(source, Some(label), value.as_deref());
+            }
             EngineEvent::Input(message) => {
                 self.handle_message(message, None, None);
             }

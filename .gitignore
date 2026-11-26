@@ -16,3 +16,4 @@ press/
 
 # Rust
 /target/
+.claude/worktrees/

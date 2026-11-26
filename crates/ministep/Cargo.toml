@@ -9,6 +9,8 @@ default-run = "ministep"
 [dependencies]
 ministep-core = { workspace = true }
 ministep-midi = { workspace = true }
+ministep-remote = { workspace = true }
+ministep-minilab = { workspace = true }
 eframe = { workspace = true }
 clap = { workspace = true }
 parking_lot = { workspace = true }

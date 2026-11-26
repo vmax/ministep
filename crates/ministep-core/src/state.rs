@@ -252,11 +252,10 @@ impl AppState {
             self.status_message = "Nothing to undo.".into();
             return None;
         };
-        if let (Some(previous), Some(_)) = (self.sequence.last_mut(), step.note) {
-            if previous.note == step.note && previous.tie {
+        if let (Some(previous), Some(_)) = (self.sequence.last_mut(), step.note)
+            && previous.note == step.note && previous.tie {
                 previous.tie = false;
             }
-        }
         self.clamp_positions();
         self.status_message = "Removed last step.".into();
         Some(step)

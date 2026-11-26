@@ -169,3 +169,44 @@ Benchmarks and simulation:
 Regression tests live in `tests/test_timing.py` and run the real clock and
 sequencer against a fake clock with modelled wake overshoot, so they are
 deterministic and fast.
+
+## Rust build (November 2026)
+
+The grid, late policy and stall handling above are unchanged; they live in
+`crates/ministep-core/src/clock.rs` and `transport.rs`. What changed is how the
+deadline is *reached*.
+
+`Transport::poll(now)` is a pure state machine: it emits everything due at
+`now` (note-offs first, then the step's note-ons) and returns the next
+deadline. A dedicated thread with a Mach time-constraint policy runs it and
+waits in three stages:
+
+1. a wakeable condition-variable wait until 6 ms before the deadline (so Play,
+   edits and port changes wake it immediately);
+2. `mach_wait_until` to 100 µs before the deadline;
+3. a spin for the last 100 µs.
+
+Measured on this machine (Apple silicon), each step was needed:
+
+| wait strategy (RT thread unless noted)  | wake lateness p95 | max      | CPU   |
+| --------------------------------------- | ----------------- | -------- | ----- |
+| condvar + 0.8 ms spin, **no RT policy** | 17.5 ms           | 31.9 ms  | 0.3 % |
+| condvar + 0.8 ms spin                   | 1.05 ms           | 5.2 ms   | 1.6 % |
+| condvar + 5 ms spin                     | 0.002 ms          | 0.005 ms | 12 %  |
+| condvar → `mach_wait_until` → 0.1 ms spin | 0.003 ms        | 0.006 ms | 0.5 % |
+
+Condition-variable timeouts are coalesced by the kernel and overshoot by
+1–4 ms even on a time-constraint thread; `mach_wait_until` is not.
+
+End to end (engine → CoreMIDI → a virtual destination in the same process,
+`cargo run --release -p ministep-midi --example bench -- 10 120 180 240`):
+
+| tempo 1/16 | Rust arrival jitter p99 / max | Rust drift max | Python wake lateness p99 / max (`tools/timing_bench.py realtime`) |
+| ---------- | ----------------------------- | -------------- | ------------------ |
+| 120        | 0.08 / 0.09 ms                | ≈0.1 ms        | 13.9 / 14.5 ms     |
+| 180        | 0.09 / 0.11 ms                | ≈0.1 ms        | 4.5 / 13.5 ms      |
+| 240        | 0.08 / 0.10 ms                | ≈0.1 ms        | 7.4 / 29.3 ms      |
+
+The remaining ~0.1 ms is CoreMIDI delivery, not the engine (engine wake
+lateness max 0.003–0.006 ms). The GUI renders on its own thread and cannot
+delay the transport; it only takes the state lock briefly once per frame.

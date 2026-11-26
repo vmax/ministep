@@ -52,8 +52,8 @@ pub fn relative_delta(value: u8) -> i64 {
 pub enum EngineEvent {
     /// A profile knob sent a CC.
     Knob { page: String, label: String, value: u8 },
-    /// A learned control produced a command (label, formatted value).
-    Command { label: String, value: Option<String> },
+    /// A learned control produced a command (label, formatted value, source message).
+    Command { label: String, value: Option<String>, source: MidiMessage },
     /// The encoder menu changed; `None` when closed.
     Menu(Option<(String, String)>),
     /// Any input message, after routing (for value displays).
@@ -631,8 +631,8 @@ impl Engine {
         if menu_enabled && self.handle_main_encoder(&message) {
             return;
         }
-        if let MidiMessage::ControlChange { control: cc, value, .. } = message {
-            if let Some(knob) = minilab_knob(cc) {
+        if let MidiMessage::ControlChange { control: cc, value, .. } = message
+            && let Some(knob) = minilab_knob(cc) {
                 let mut control = self.shared.control.lock();
                 if let Some(router) = control.profile.as_mut() {
                     let page = router.page_index;
@@ -645,7 +645,6 @@ impl Engine {
                     return;
                 }
             }
-        }
         if self.handle_learn_and_mapping(&message) {
             return;
         }
@@ -696,7 +695,7 @@ impl Engine {
         drop(control);
         let Some(command) = command else { return false };
         let (label, value) = display_command(&command);
-        self.shared.emit(EngineEvent::Command { label, value });
+        self.shared.emit(EngineEvent::Command { label, value, source: message.clone() });
         self.execute(command);
         true
     }
@@ -704,9 +703,9 @@ impl Engine {
     fn handle_note_input(&self, message: MidiMessage) {
         let outs = self.shared.outs.read().clone();
         let mut state = self.shared.state.lock();
-        if state.active_track == Track::Drums {
-            if let MidiMessage::NoteOn { note, .. } | MidiMessage::NoteOff { note, .. } = message {
-                if state.drums.lane_for_note(note).is_some() {
+        if state.active_track == Track::Drums
+            && let MidiMessage::NoteOn { note, .. } | MidiMessage::NoteOff { note, .. } = message
+                && state.drums.lane_for_note(note).is_some() {
                     let channel = state.drums.channel - 1;
                     let sink = outs.drum_sink();
                     if let MidiMessage::NoteOn { velocity, .. } = message.clone().filter_press() {
@@ -725,8 +724,6 @@ impl Engine {
                     }
                     return;
                 }
-            }
-        }
         let channel = state.output_channel - 1;
         let out = outs.melodic.as_ref();
         match message {

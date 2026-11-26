@@ -37,7 +37,9 @@ MIDI keyboard / MiniLab 3
           └──► standalone MIDI synth
 ```
 
-> A short demo belongs here: slowly enter notes, watch the MiniLab feedback and TUI update, then press PLAY.
+> A short demo belongs here: slowly enter notes, watch the MiniLab feedback and the window update, then press PLAY.
+
+MiniStep is written in Rust with a native egui window in a hardware style: transport bar, track list, a 16-step grid with a velocity lane, and a synth panel of knobs that send MIDI CC. The original Python/Textual build lives in `legacy/` until the Rust build has been used on real hardware for a while.
 
 ## What it does
 
@@ -47,29 +49,31 @@ MIDI keyboard / MiniLab 3
 - **Clocked playback.** Internal monotonic timing on an anchored grid plays the sequence at a selectable BPM, 1/4, 1/8, 1/16, or 1/32 division, with a global gate. Late wake-ups never shift the transport; see `docs/TIMING.md`. Pass `--timing-log PATH` to append timing summaries whenever playback stops.
 - **Non-destructive loop spans.** Choose `FULL → 8 → 16 → 32 → 64`; selecting `16`, for example, loops the first 16 stored steps without truncating later ones.
 - **Drum track.** A second, 16-step track with Kick, Snare, Closed Hat, and Open Hat lanes fires short MIDI notes (40 ms) on its own channel and, optionally, its own output port such as an IAC bus into an Ableton Drum Rack. Both tracks run from one clock, so they cannot drift apart. `Tab` switches the editor between tracks. Drums follow the same audition → commit → step workflow as notes: play `C1`/`D1`/`F#1`/`A#1` on the keyboard to hear a lane, then `Enter` writes the played hits (with their velocities) into the current step and moves on.
-- **Persistence.** Load JSON at startup and save/load the default sequence from the TUI. Named patterns are per track: `Shift+S`/`Shift+L` save and load melodic patterns on the melodic track and drum patterns on the drum track, each in its own directory, so loading a new melody never changes the beat and vice versa. Older combined pattern files still load.
+- **Persistence.** Load JSON at startup and save/load the default sequence from the app. Named patterns are per track: `Shift+S`/`Shift+L` save and load melodic patterns on the melodic track and drum patterns on the drum track, each in its own directory, so loading a new melody never changes the beat and vice versa. Older combined pattern files still load.
 - **MIDI-safe pass-through.** Notes from live input and sequencer playback are ownership-tracked, so one source's Note Off does not cut off the other source's same-pitch note.
 
 ## Installation
 
-Requires Python 3.12+, macOS MIDI services, and [uv](https://docs.astral.sh/uv/).
+Requires macOS and a Rust toolchain (1.85+).
 
 ```bash
 git clone git@github.com:vmax/ministep.git
 cd ministep
-uv sync
+cargo build --release
 
-uv run ministep --help
-uv run ministep --list-midi
+./target/release/ministep --help
+./target/release/ministep --list-midi
 ```
+
+Below, `ministep` means `./target/release/ministep` (or `cargo run --release --`).
 
 Start with explicit port names (exact names or an unambiguous substring both work):
 
 ```bash
-uv run ministep --input "Minilab3 MIDI" --output "MiniStep"
+ministep --input "Minilab3 MIDI" --output "MiniStep"
 ```
 
-Without `--input` or `--output`, MiniStep lists available ports and, in a terminal, offers a picker. Use `--load melody.json` to open a saved sequence at startup.
+Without `--output`, MiniStep creates its own virtual MIDI source, **MiniStep Out**, which Ableton and other apps see directly — no IAC bus needed. Ports can be changed at any time from the settings button (top right). Use `--load melody.json` to open a saved sequence at startup.
 
 ## macOS IAC routing
 
@@ -97,7 +101,7 @@ The included profile targets Cherry Audio Miniverse, but MiniStep itself is MIDI
 
 ## Controls
 
-The Textual TUI shows selected MIDI ports, tempo, division, gate, transpose, loop span, transport/REC state, auditioned/held notes, and a numbered step grid. MIDI note names follow Ableton's convention: MIDI 60 is `C3`.
+The window shows the transport (stop, play, REC dot, tempo, division, gate), the tracks (melodic plus one row per drum lane), the step grid with an orange playhead, a velocity lane, and the synth panel. Everything is direct: drag or scroll the tempo (Shift = fine, double-click to type), drag a note cell up/down to change its pitch, click or drag across drum cells to paint hits, drag in the velocity lane, right-click a step for rest/tie/delete, right-click a drum lane to clear or remove it, and use `+` to add a lane. The grey dot left of the grid shows the auditioned note; click it (or press `Enter`) to commit. MIDI note names follow Ableton's convention: MIDI 60 is `C3`.
 
 | Computer key | Action |
 | --- | --- |
@@ -147,7 +151,7 @@ REC auto-commit stays melodic-only; drums are always committed explicitly.
 Run the MiniLab display integration explicitly:
 
 ```bash
-uv run ministep \
+ministep \
   --input "Minilab3 MIDI" \
   --output "MiniStep" \
   --mapping minilab3 \
@@ -182,7 +186,7 @@ Pads are matched by both MIDI channel and note. A learned pad/control is consume
 A YAML profile turns the MiniLab's eight knobs into outgoing CC controls arranged in pages. Use it with the display/menu path:
 
 ```bash
-uv run ministep \
+ministep \
   --input "Minilab3 MIDI" \
   --output "MiniStep" \
   --minilab-display \
@@ -254,7 +258,7 @@ Melodic pattern:
 }
 ```
 
-`note: null` is a rest. `loop_length: null` means `FULL`; otherwise it is one of 8, 16, 32, or 64. Stored note values are unchanged by live `transpose`; the value is applied during playback. `tie` carries a note over to its following matching note. `enabled` and `accent` are preserved in the format, although this TUI has no controls to edit them. The root is derived from the first pitched step, so it travels with the notes.
+`note: null` is a rest. `loop_length: null` means `FULL`; otherwise it is one of 8, 16, 32, or 64. Stored note values are unchanged by live `transpose`; the value is applied during playback. `tie` carries a note over to its following matching note. `enabled` and `accent` are preserved in the format, although the app has no controls to edit them. The root is derived from the first pitched step, so it travels with the notes.
 
 Drum pattern:
 
@@ -292,38 +296,34 @@ The drum track sends plain MIDI notes, so any Drum Rack can play it. Melodic and
 ## Architecture
 
 ```text
-MIDI backend ──► controller mapping / profile router ──► runtime + state
-     │                                                       │
-     └────────────────── MIDI pass-through ──────────────────┤
-                                                             ▼
-                                                   sequencer + internal clock
-                                                             │
-                                                             ▼
-                                                        MIDI output
-
-MiniLab OLED / pad SysEx ◄────────────────────────────── runtime state
+CoreMIDI input ──► Engine::handle_midi ──► encoder menu / profile knobs / learned commands / notes
+                         │                                   │
+   GUI, remote socket ───┤ (all &self, thread-safe)          ▼
+                         ▼                             AppState (Mutex)
+               real-time transport thread ──► Transport::poll ──► OwnedOutput ──► CoreMIDI
+                                                            ▲
+MiniLab OLED / pads ◄── EngineEvent channel ────────────────┘
 ```
 
-- `state.py` owns typed steps, edits, settings, note names, and JSON (de)serialisation.
-- `patterns.py` stores named patterns as one JSON file each with atomic writes; the TUI and remote socket only call it.
-- `sequencer.py` and `clock.py` perform async playback and timing without hardware/UI dependencies.
-- `midi.py` discovers and opens mido ports, moves callback input into asyncio, passes MIDI through, and tracks note ownership.
-- `controller.py` and `mappings/` translate learned hardware messages into abstract commands.
-- `profiles.py` routes MiniLab knob values through YAML CC pages; `minilab3_display.py` contains the MiniLab-specific SysEx client.
-- `runtime.py` coordinates state, commands, playback, MIDI input, and the encoder menu; `tui.py` is the Textual interface; `main.py` wires the CLI and ports.
+The Cargo workspace:
 
-Controller-specific behaviour stays outside the sequencer core. The current clock source is internal; the `StepClock` abstraction leaves room for an external MIDI-clock implementation.
+- `crates/ministep-core` — state, drums, notes, JSON formats (byte-identical with the Python build), anchored grid clock, the poll-driven `Transport`, MIDI ownership tracking, controller mapping, YAML profiles, and the `Engine` with its real-time transport thread. No UI, no MIDI backend.
+- `crates/ministep-midi` — CoreMIDI ports via `midir`, including the virtual **MiniStep Out** source, plus the end-to-end timing bench.
+- `crates/ministep-remote` — the NDJSON Unix-socket server.
+- `crates/ministep-minilab` — MiniLab 3 OLED and pad SysEx.
+- `crates/ministep` — the egui app and CLI.
+
+The transport thread runs with a Mach time-constraint policy and waits for each deadline in three stages (wakeable wait, `mach_wait_until`, short spin). See `docs/TIMING.md` for measurements against the Python build.
 
 ## Development
 
 ```bash
-uv sync
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
+cargo test --workspace
+cargo clippy --workspace --all-targets
+cargo run --release -p ministep-midi --example bench -- 30 120 180 240   # end-to-end timing
 ```
 
-The test suite covers timing calculations, playback order/gates/ties/loop spans, record mode, editing and persistence, mappings/MIDI Learn, profiles, MiniLab display packets, encoder menus, and TUI rendering.
+The tests cover the Python suite's behaviour (state, persistence, patterns, drums, sequencer, record mode, MIDI learn, encoder menu, profiles, timing), golden files written by the Python build, deterministic transport simulations, the remote socket, and MiniLab packets byte for byte.
 
 ## Limitations and roadmap
 

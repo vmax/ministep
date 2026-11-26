@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use eframe::egui::{self, Align2, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use ministep_core::controller::{Command, CommandName};
-use ministep_core::drums::{DRUM_STEPS, DrumLane};
+use ministep_core::drums::DrumLane;
 use ministep_core::engine::Engine;
 use ministep_core::notes::note_name;
 use ministep_core::patterns::PatternKind;
@@ -25,6 +25,11 @@ const GUTTER: f32 = 56.0;
 /// Extra GM drum notes offered when adding lanes.
 const EXTRA_LANES: [(&str, u8); 8] =
     [("Clap", 39), ("Rim", 37), ("Low Tom", 45), ("Hi Tom", 50), ("Crash", 49), ("Ride", 51), ("Cowbell", 56), ("Shaker", 70)];
+
+/// Toolbar button: icon, tooltip, action.
+type Tool = (Icon, &'static str, Box<dyn Fn(&Engine)>);
+/// Synth page snapshot: name, kind, knobs as (number, label, value, display).
+type PageView = (String, PageKind, Vec<(u8, String, u8, String)>);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Sel {
@@ -461,9 +466,9 @@ impl App {
             let shown_h = if on { h } else { h.min(16.0) };
             painter.line_segment([pos2(x, r.bottom() - 8.0), pos2(x, r.bottom() - 8.0 - shown_h)], Stroke::new(if on { 4.0 } else { 2.0 }, if on { p.ink } else { p.faint }));
         }
-        if vel_resp.dragged() || vel_resp.clicked() {
-            if let Some(pos) = vel_resp.interact_pointer_pos() {
-                if let Some(col) = col_at(pos) {
+        if (vel_resp.dragged() || vel_resp.clicked())
+            && let Some(pos) = vel_resp.interact_pointer_pos()
+                && let Some(col) = col_at(pos) {
                     let v = (((vel_row.bottom() - 8.0 - pos.y) / (vel_h - 16.0)) * 127.0).clamp(1.0, 127.0) as u8;
                     let sel = self.sel;
                     self.engine.edit(|st| match sel {
@@ -479,8 +484,6 @@ impl App {
                         }
                     });
                 }
-            }
-        }
         if vel_resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
         }
@@ -633,10 +636,10 @@ impl App {
     ) {
         let p = self.pal();
         let Some(l) = s.drums.lanes.get(lane) else { return };
-        for col in 0..DRUM_STEPS {
+        for (col, step) in l.steps.iter().enumerate() {
             let r = Rect::from_min_size(pos2(cell_x(col), row.top()), vec2(cell_w, row.height()));
             let hovered = resp.hover_pos().is_some_and(|h| r.contains(h));
-            let on = l.steps[col].active;
+            let on = step.active;
             painter.rect_filled(r, 10.0, if on { p.ink } else if hovered { p.well_hover } else { p.well });
             if s.drums.cursor_step == col && s.drums.cursor_lane == lane && ui.ctx().memory(|m| m.focused().is_none()) {
                 painter.rect_stroke(r.expand(3.0), 12.0, Stroke::new(2.0, p.accent.gamma_multiply(0.7)), StrokeKind::Outside);
@@ -644,8 +647,8 @@ impl App {
         }
         // Paint mode: the first cell decides on/off for the whole drag.
         let paint_id = ui.scope_id().with("drum_paint");
-        if let Some(pos) = resp.interact_pointer_pos() {
-            if let Some(col) = col_at(pos) {
+        if let Some(pos) = resp.interact_pointer_pos()
+            && let Some(col) = col_at(pos) {
                 if resp.drag_started() || resp.clicked() {
                     let target = !l.steps[col].active;
                     ui.data_mut(|d| d.insert_temp(paint_id, target));
@@ -660,7 +663,6 @@ impl App {
                     });
                 }
             }
-        }
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
@@ -684,7 +686,7 @@ impl App {
             return;
         }
         let melodic = self.sel == Sel::Melodic;
-        let tools: Vec<(Icon, &str, Box<dyn Fn(&Engine)>)> = if melodic {
+        let tools: Vec<Tool> = if melodic {
             vec![
                 (Icon::Commit, "Commit auditioned note (Enter)", Box::new(|e: &Engine| {
                     e.commit();
@@ -793,7 +795,7 @@ impl App {
     fn synth_groups(&mut self, ui: &mut Ui, rect: Rect, big: bool) -> bool {
         let p = self.pal();
         let painter = ui.painter().clone();
-        let pages: Vec<(String, PageKind, Vec<(u8, String, u8, String)>)> = {
+        let pages: Vec<PageView> = {
             let control = self.engine.control();
             let Some(router) = control.profile.as_ref() else { return false };
             router
@@ -1072,11 +1074,10 @@ impl App {
                         }
                     }
                 });
-                if let Some(c) = choice {
-                    if let Err(e) = self.ports.set_input(&self.engine, c.as_deref()) {
+                if let Some(c) = choice
+                    && let Err(e) = self.ports.set_input(&self.engine, c.as_deref()) {
                         self.engine.edit(|st| st.status_message = e);
                     }
-                }
                 ui.end_row();
 
                 for (label, drums) in [("Output", false), ("Drum output", true)] {

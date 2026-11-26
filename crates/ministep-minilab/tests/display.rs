@@ -187,11 +187,12 @@ fn engine_events_render_like_the_python_receive_loop() {
     display.show_event(&EngineEvent::Knob { page: "FILTER".into(), label: "CUTOFF".into(), value: 96 });
     assert_eq!(screen.last().unwrap(), packets::encoder_screen("FILTER CUTOFF", 96, None));
 
-    display.show_event(&EngineEvent::Command { label: "BPM".into(), value: Some("142".into()) });
-    assert_eq!(screen.last().unwrap(), packets::text_screen("BPM", "142"));
+    display.show_event(&EngineEvent::Command { label: "BPM".into(), value: Some("142".into()), source: cc(116, 80) });
+    assert_eq!(screen.last().unwrap(), packets::encoder_screen("BPM", 80, Some("142")));
 
     let before = screen.len();
-    display.show_event(&EngineEvent::Command { label: "TOGGLE PLAY".into(), value: None });
+    let pad = MidiMessage::NoteOn { channel: 9, note: 36, velocity: 100 };
+    display.show_event(&EngineEvent::Command { label: "PLAY STOP".into(), value: None, source: pad });
     display.show_event(&EngineEvent::Input(cc(1, 5)));
     assert_eq!(screen.len(), before);
 

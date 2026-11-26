@@ -157,11 +157,10 @@ impl Transport {
     }
 
     fn release_tie(&mut self, outs: &Outputs) {
-        if let Some((note, channel)) = self.active_tie.take() {
-            if let Some(m) = &outs.melodic {
+        if let Some((note, channel)) = self.active_tie.take()
+            && let Some(m) = &outs.melodic {
                 m.lock().note_off(note, channel, Owner::Sequencer);
             }
-        }
     }
 
     /// Play exactly one grid step on both tracks.
@@ -196,11 +195,10 @@ impl Transport {
         }
         let continuing = note.is_some() && self.active_tie.map(|(n, _)| n) == note;
         let Some(note) = note else { return };
-        if !continuing {
-            if let Some(m) = &outs.melodic {
+        if !continuing
+            && let Some(m) = &outs.melodic {
                 m.lock().note_on(note, step.velocity, channel, Owner::Sequencer);
             }
-        }
         if step.tie {
             let tie_channel = self.active_tie.map_or(channel, |(_, c)| c);
             self.active_tie = Some((note, tie_channel));

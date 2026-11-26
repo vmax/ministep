@@ -2136,6 +2136,8 @@ dependencies = [
  "eframe",
  "ministep-core",
  "ministep-midi",
+ "ministep-minilab",
+ "ministep-remote",
  "parking_lot",
  "rfd",
  "serde_json",

@@ -42,6 +42,15 @@ struct Args {
     /// MIDI output for profile CCs; overrides the profile's `output`.
     #[arg(long)]
     control_output: Option<String>,
+    /// Show MiniStep state on a connected MiniLab 3 (OLED + pads) and enable its encoder menu.
+    #[arg(long)]
+    minilab_display: bool,
+    /// Do not open the local control socket.
+    #[arg(long)]
+    no_remote: bool,
+    /// Unix socket for remote control (NDJSON); default ~/.config/ministep/control.sock.
+    #[arg(long)]
+    remote_socket: Option<PathBuf>,
     /// Append a transport timing summary to this file each time playback stops.
     #[arg(long)]
     timing_log: Option<PathBuf>,
@@ -82,6 +91,7 @@ fn run(args: Args) -> Result<(), String> {
             timing_log: args.timing_log.clone(),
             mapping,
             mapping_path: Some(default_mapping_path()),
+            encoder_menu: args.minilab_display,
             ..EngineConfig::default()
         },
     );
@@ -94,6 +104,24 @@ fn run(args: Args) -> Result<(), String> {
         let router = ports.router_for(profile, args.control_output.as_deref())?;
         engine.set_profile(Some(router));
     }
+    let _remote = if args.no_remote {
+        None
+    } else {
+        let path = args.remote_socket.clone().unwrap_or_else(ministep_remote::default_socket_path);
+        match ministep_remote::RemoteServer::start(Arc::clone(&engine), path) {
+            Ok(server) => Some(server),
+            Err(e) => {
+                eprintln!("ministep: cannot open control socket: {e}");
+                None
+            }
+        }
+    };
+    let _display = if args.minilab_display {
+        let display = ministep_minilab::MiniLab3Display::open().map_err(|e| format!("cannot open MiniLab display: {e}"))?;
+        Some(ministep_minilab::run_display(Arc::clone(&engine), display))
+    } else {
+        None
+    };
     engine.edit(|s| s.status_message = "Ready: audition a note, then commit it.".into());
     let engine_for_app = Arc::clone(&engine);
     let profile_path = args.profile.clone();
