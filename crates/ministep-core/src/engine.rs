@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -148,10 +148,41 @@ impl Default for EngineConfig {
     }
 }
 
+/// Messages to the transport thread, which owns the `Transport` and its own
+/// copy of the state: it never waits for a lock another thread holds (apart
+/// from the few-microsecond MIDI port send).
+enum ToTransport {
+    /// Fresh copy of the state after an edit (playheads are the thread's own).
+    Snapshot(Box<AppState>),
+    Outputs(Outputs),
+    Start,
+    Restart,
+    /// Stop, release notes, reply with the timing summary text (if any).
+    Stop(Sender<Option<String>>),
+    ReleaseDrums,
+    Shutdown,
+}
+
+/// Work the transport thread hands off so it never blocks or frees memory.
+enum Chore {
+    Notify,
+    Drop(#[allow(dead_code)] Box<AppState>),
+}
+
+/// Transport position, written by the transport thread, read by everyone.
+#[derive(Default)]
+struct Live {
+    playing: AtomicBool,
+    playhead: AtomicUsize,
+    drum_playhead: AtomicUsize,
+}
+
 struct Shared {
     control: Mutex<Control>,
-    transport: Mutex<Transport>,
+    /// The editable state. The transport thread works on its own copy.
     state: Mutex<AppState>,
+    live: Live,
+    /// Outputs as seen by input pass-through and previews (not the transport).
     outs: RwLock<Outputs>,
     patterns: PatternStore,
     sequence_path: PathBuf,
@@ -177,8 +208,19 @@ impl Shared {
 
 pub struct Engine {
     shared: Arc<Shared>,
-    wake: Sender<()>,
-    thread: Mutex<Option<JoinHandle<()>>>,
+    tx: Sender<ToTransport>,
+    threads: Mutex<Vec<JoinHandle<()>>>,
+}
+
+/// Read-only view of the state (with the live transport position).
+/// Do not hold it across frames.
+pub struct StateRef<'a>(MutexGuard<'a, AppState>);
+
+impl std::ops::Deref for StateRef<'_> {
+    type Target = AppState;
+    fn deref(&self) -> &AppState {
+        &self.0
+    }
 }
 
 impl Engine {
@@ -191,10 +233,12 @@ impl Engine {
             profile: config.profile,
             ..Control::default()
         };
+        let initial = Box::new(state.clone());
+        let initial_outs = outputs.clone();
         let shared = Arc::new(Shared {
             control: Mutex::new(control),
-            transport: Mutex::new(Transport::new(stats)),
             state: Mutex::new(state),
+            live: Live::default(),
             outs: RwLock::new(outputs),
             patterns: config.patterns,
             sequence_path: config.sequence_path,
@@ -204,14 +248,30 @@ impl Engine {
             listeners: Mutex::new(Vec::new()),
             events: Mutex::new(Vec::new()),
         });
-        let (wake, rx) = unbounded();
+        let (tx, rx) = unbounded();
+        let (chores_tx, chores_rx) = unbounded::<Chore>();
+        let notifier_shared = Arc::clone(&shared);
+        let notifier = std::thread::Builder::new()
+            .name("ministep-notify".into())
+            .spawn(move || {
+                for chore in chores_rx {
+                    if let Chore::Notify = chore {
+                        notifier_shared.notify();
+                    }
+                }
+            })
+            .expect("spawn notifier thread");
         let thread_shared = Arc::clone(&shared);
         let (margin, realtime) = (config.spin_margin, config.realtime);
+        let transport = Transport::new(stats);
         let handle = std::thread::Builder::new()
             .name("ministep-transport".into())
-            .spawn(move || transport_thread(&thread_shared, &rx, margin, realtime))
+            .spawn(move || {
+                let worker = TransportWorker { live: &thread_shared.live, chores: chores_tx, transport, state: initial, outs: initial_outs };
+                worker.run(&rx, margin, realtime);
+            })
             .expect("spawn transport thread");
-        Arc::new(Self { shared, wake, thread: Mutex::new(Some(handle)) })
+        Arc::new(Self { shared, tx, threads: Mutex::new(vec![handle, notifier]) })
     }
 
     // --- observation ----------------------------------------------------------
@@ -232,9 +292,19 @@ impl Engine {
         rx
     }
 
-    /// Read-only access. Do not hold across frames: the transport thread needs it.
-    pub fn state(&self) -> MutexGuard<'_, AppState> {
-        self.shared.state.lock()
+    /// Read-only access, with the live transport position. Change state with [`Engine::edit`].
+    pub fn state(&self) -> StateRef<'_> {
+        StateRef(self.locked())
+    }
+
+    /// The state lock, with the transport position copied in.
+    fn locked(&self) -> MutexGuard<'_, AppState> {
+        let mut g = self.shared.state.lock();
+        let live = &self.shared.live;
+        g.playing = live.playing.load(Ordering::Acquire);
+        g.playhead = live.playhead.load(Ordering::Acquire);
+        g.drum_playhead = live.drum_playhead.load(Ordering::Acquire);
+        g
     }
 
     pub fn control(&self) -> MutexGuard<'_, Control> {
@@ -253,16 +323,17 @@ impl Engine {
         self.shared.outs.read().clone()
     }
 
-    /// Mutate state and notify observers.
+    /// Mutate state, hand the transport a fresh copy, and notify observers.
     pub fn edit<R>(&self, f: impl FnOnce(&mut AppState) -> R) -> R {
-        let r = f(&mut self.shared.state.lock());
+        let r = f(&mut self.locked());
         self.changed();
         r
     }
 
     fn changed(&self) {
+        let snapshot = Box::new(self.shared.state.lock().clone());
+        let _ = self.tx.send(ToTransport::Snapshot(snapshot));
         self.shared.notify();
-        let _ = self.wake.send(());
     }
 
     fn set_status(&self, msg: impl Into<String>) {
@@ -276,7 +347,9 @@ impl Engine {
         self.stop();
         self.shared.outs.read().all_notes_off();
         let synth = self.shared.outs.read().synth.clone();
-        *self.shared.outs.write() = Outputs { synth: outputs.synth.or(synth), ..outputs };
+        let outs = Outputs { synth: outputs.synth.or(synth), ..outputs };
+        *self.shared.outs.write() = outs.clone();
+        let _ = self.tx.send(ToTransport::Outputs(outs));
         self.edit(|s| {
             s.selected_output = melodic_name;
             s.selected_drum_output = drum_name;
@@ -286,15 +359,16 @@ impl Engine {
     /// Attach (or detach) the built-in drum synth.
     pub fn set_drum_synth(&self, synth: Option<Arc<dyn crate::voice::DrumVoiceSink>>) {
         self.shared.outs.write().synth = synth;
+        let _ = self.tx.send(ToTransport::Outputs(self.shared.outs.read().clone()));
         self.changed();
     }
 
     pub fn set_drum_route(&self, route: crate::voice::DrumRoute) {
-        if self.state().playing {
-            // Drop hanging MIDI drum notes when MIDI leaves the route.
-            self.shared.transport.lock().release_drums(&self.shared.outs.read());
-        }
         self.edit(|s| s.drum_route = route);
+        if !route.midi() {
+            // Drop hanging MIDI drum notes when MIDI leaves the route.
+            let _ = self.tx.send(ToTransport::ReleaseDrums);
+        }
     }
 
     /// Play a drum lane's synth voice now (GUI preview).
@@ -316,37 +390,47 @@ impl Engine {
     // --- transport ----------------------------------------------------------------
 
     pub fn play(&self) {
-        {
-            let mut transport = self.shared.transport.lock();
+        let start = {
             let mut state = self.shared.state.lock();
             if self.shared.outs.read().melodic.is_none() {
                 state.status_message = "Choose a MIDI output before playing.".into();
+                false
             } else if !Transport::has_content(&state) {
                 state.status_message = "Sequence is empty.".into();
+                false
             } else {
-                transport.start(&mut state, true);
                 state.status_message = "Playing from step 1.".into();
+                true
             }
+        };
+        if start {
+            // Show it immediately; the transport thread confirms on its first poll.
+            let live = &self.shared.live;
+            live.playhead.store(0, Ordering::Release);
+            live.drum_playhead.store(0, Ordering::Release);
+            live.playing.store(true, Ordering::Release);
         }
         self.changed();
+        if start {
+            let _ = self.tx.send(ToTransport::Start);
+        }
     }
 
     pub fn stop(&self) {
-        let summary = {
-            let mut transport = self.shared.transport.lock();
-            let mut state = self.shared.state.lock();
+        let (reply, answer) = crossbeam_channel::bounded(1);
+        let summary = if self.tx.send(ToTransport::Stop(reply)).is_ok() {
+            answer.recv_timeout(Duration::from_secs(2)).ok().flatten()
+        } else {
+            None
+        };
+        self.shared.live.playing.store(false, Ordering::Release);
+        {
             let outs = self.shared.outs.read().clone();
-            transport.stop(&mut state, &outs);
             outs.all_notes_off();
+            let mut state = self.shared.state.lock();
             state.held_notes.clear();
             state.status_message = "Stopped; sent All Notes Off.".into();
-            let label = format!("{} BPM 1/{}", fmt_g(state.bpm), state.step_division);
-            transport.stats.as_mut().and_then(|s| {
-                let summary = s.summary();
-                s.reset();
-                summary.map(|x| x.format(&label))
-            })
-        };
+        }
         if let (Some(text), Some(path)) = (summary, &self.shared.timing_log) {
             let written = std::fs::OpenOptions::new()
                 .create(true)
@@ -370,15 +454,8 @@ impl Engine {
             self.play();
             return;
         }
-        {
-            let mut transport = self.shared.transport.lock();
-            let mut state = self.shared.state.lock();
-            let outs = self.shared.outs.read().clone();
-            transport.stop(&mut state, &outs);
-            transport.start(&mut state, true);
-            state.status_message = "Restarted from step 1.".into();
-        }
-        self.changed();
+        self.edit(|s| s.status_message = "Restarted from step 1.".into());
+        let _ = self.tx.send(ToTransport::Restart);
     }
 
     // --- commands -------------------------------------------------------------------
@@ -505,7 +582,7 @@ impl Engine {
     }
 
     pub fn save_to(&self, path: &std::path::Path) -> Result<(), PatternError> {
-        let r = self.shared.state.lock().save(path);
+        let r = self.locked().save(path);
         if let Err(e) = &r {
             self.set_status(format!("Failed to save: {e}"));
         }
@@ -522,7 +599,7 @@ impl Engine {
         if self.state().playing {
             self.stop();
         }
-        let r = self.shared.state.lock().load(path);
+        let r = self.locked().load(path);
         if let Err(e) = &r {
             self.set_status(format!("Failed to load: {e}"));
         }
@@ -600,7 +677,7 @@ impl Engine {
 
     pub fn menu_screen(&self) -> Option<(String, String)> {
         let control = self.shared.control.lock();
-        let state = self.shared.state.lock();
+        let state = self.locked();
         menu_screen(&control, &state)
     }
 
@@ -608,7 +685,7 @@ impl Engine {
     pub fn handle_main_encoder(&self, message: &MidiMessage) -> bool {
         let MidiMessage::ControlChange { control: cc, value, .. } = *message else { return false };
         let mut control = self.shared.control.lock();
-        let mut state = self.shared.state.lock();
+        let mut state = self.locked();
         let consumed = if MAIN_ENCODER_SHIFT_PRESSES.contains(&cc) && value > 0 {
             control.menu_open = false;
             control.menu_editing = false;
@@ -728,7 +805,7 @@ impl Engine {
 
     fn handle_note_input(&self, message: MidiMessage) {
         let outs = self.shared.outs.read().clone();
-        let mut state = self.shared.state.lock();
+        let mut state = self.locked();
         if state.active_track == Track::Drums
             && let MidiMessage::NoteOn { note, .. } | MidiMessage::NoteOff { note, .. } = message
                 && state.drums.lane_for_note(note).is_some() {
@@ -789,8 +866,9 @@ impl Engine {
     pub fn shutdown(&self) {
         if self.shared.running.swap(false, Ordering::AcqRel) {
             self.stop();
-            let _ = self.wake.send(());
-            if let Some(handle) = self.thread.lock().take() {
+            let _ = self.tx.send(ToTransport::Shutdown);
+            // The transport thread exits, dropping its chore sender, so the notifier ends too.
+            for handle in self.threads.lock().drain(..) {
                 let _ = handle.join();
             }
         }
@@ -895,42 +973,103 @@ fn instant_at(t: f64) -> Instant {
     origin + Duration::from_secs_f64((t - base).max(0.0))
 }
 
-fn transport_thread(shared: &Shared, wake: &Receiver<()>, spin_margin: f64, realtime: bool) {
-    if realtime {
-        let ok = crate::rt::promote_current_thread();
-        if std::env::var_os("MINISTEP_DEBUG_RT").is_some() {
-            eprintln!("transport thread realtime policy: {ok}");
-        }
-    }
-    while shared.running.load(Ordering::Acquire) {
-        let (deadline, stepped) = {
-            let mut transport = shared.transport.lock();
-            let mut state = shared.state.lock();
-            let outs = shared.outs.read().clone();
-            let before = transport.last_step_at;
-            let deadline = transport.poll(monotonic(), &mut state, &outs, &monotonic);
-            (deadline, transport.last_step_at != before)
-        };
-        if stepped {
-            shared.notify();
-        }
-        // Three stages: a wakeable (but coarse, coalesced) wait until well before
-        // the deadline, a precise uninterruptible Mach wait, then a short spin.
-        // See docs/TIMING.md for the measurements behind the margins.
-        let coarse = instant_at(deadline - COARSE_MARGIN);
-        if deadline - monotonic() > COARSE_MARGIN {
-            match wake.recv_deadline(coarse) {
-                Ok(()) => {
-                    while wake.try_recv().is_ok() {}
-                    continue;
-                }
-                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+struct TransportWorker<'a> {
+    live: &'a Live,
+    chores: Sender<Chore>,
+    transport: Transport,
+    state: Box<AppState>,
+    outs: Outputs,
+}
+
+impl TransportWorker<'_> {
+    /// Apply one message; false on shutdown.
+    fn handle(&mut self, msg: ToTransport) -> bool {
+        match msg {
+            ToTransport::Snapshot(mut fresh) => {
+                // The thread owns the transport position; everything else is the editor's.
+                fresh.playing = self.state.playing;
+                fresh.playhead = self.state.playhead;
+                fresh.drum_playhead = self.state.drum_playhead;
+                let old = std::mem::replace(&mut self.state, fresh);
+                let _ = self.chores.send(Chore::Drop(old));
+            }
+            ToTransport::Outputs(outs) => {
+                self.transport.stop(&mut self.state, &self.outs);
+                self.outs = outs;
+            }
+            ToTransport::Start => self.transport.start(&mut self.state, true),
+            ToTransport::Restart => {
+                self.transport.stop(&mut self.state, &self.outs);
+                self.transport.start(&mut self.state, true);
+            }
+            ToTransport::Stop(reply) => {
+                self.transport.stop(&mut self.state, &self.outs);
+                let label = format!("{} BPM 1/{}", fmt_g(self.state.bpm), self.state.step_division);
+                let summary = self.transport.stats.as_mut().and_then(|s| {
+                    let summary = s.summary();
+                    s.reset();
+                    summary.map(|x| x.format(&label))
+                });
+                self.publish();
+                let _ = reply.send(summary);
+            }
+            ToTransport::ReleaseDrums => self.transport.release_drums(&self.outs),
+            ToTransport::Shutdown => {
+                self.transport.stop(&mut self.state, &self.outs);
+                return false;
             }
         }
-        crate::rt::sleep_until(deadline - spin_margin);
-        while monotonic() < deadline {
-            std::hint::spin_loop();
+        true
+    }
+
+    fn publish(&self) {
+        self.live.playing.store(self.state.playing, Ordering::Release);
+        self.live.playhead.store(self.state.playhead, Ordering::Release);
+        self.live.drum_playhead.store(self.state.drum_playhead, Ordering::Release);
+    }
+
+    fn run(mut self, rx: &Receiver<ToTransport>, spin_margin: f64, realtime: bool) {
+        if realtime {
+            let ok = crate::rt::promote_current_thread();
+            if std::env::var_os("MINISTEP_DEBUG_RT").is_some() {
+                eprintln!("transport thread realtime policy: {ok}");
+            }
+        }
+        if let Some(stats) = self.transport.stats.as_mut() {
+            // No allocation on the timing path.
+            stats.samples.reserve(stats.capacity);
+        }
+        loop {
+            while let Ok(msg) = rx.try_recv() {
+                if !self.handle(msg) {
+                    return;
+                }
+            }
+            let before = self.transport.last_step_at;
+            let deadline = self.transport.poll(monotonic(), &mut self.state, &self.outs, &monotonic);
+            self.publish();
+            if self.transport.last_step_at != before {
+                let _ = self.chores.send(Chore::Notify);
+            }
+            // Three stages: a wakeable (but coarse, coalesced) wait until well before
+            // the deadline, a precise uninterruptible Mach wait, then a short spin.
+            // See docs/TIMING.md for the measurements behind the margins.
+            if deadline - monotonic() > COARSE_MARGIN {
+                match rx.recv_deadline(instant_at(deadline - COARSE_MARGIN)) {
+                    Ok(msg) => {
+                        if !self.handle(msg) {
+                            return;
+                        }
+                        continue;
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                }
+            }
+            crate::rt::sleep_until(deadline - spin_margin);
+            while monotonic() < deadline {
+                std::hint::spin_loop();
+            }
         }
     }
 }

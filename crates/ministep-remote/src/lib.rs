@@ -46,8 +46,6 @@ pub const MAX_LINE: usize = 4096;
 const ACCEPT_INTERVAL: Duration = Duration::from_millis(20);
 /// A client that cannot take a snapshot within this long is dropped.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
-/// Polls skipped via `Engine::version()` before a full comparison is forced anyway.
-const FULL_CHECK_EVERY: u32 = 20;
 
 /// Editor operations that are not controller commands.
 pub const EXTRA_COMMANDS: [&str; 9] =
@@ -302,21 +300,19 @@ impl Inner {
 
     fn poll_loop(&self) {
         let mut seen = None;
-        let mut skipped = 0;
         while !self.stop.load(Ordering::Acquire) {
             thread::park_timeout(POLL_INTERVAL);
             if self.stop.load(Ordering::Acquire) {
                 break;
             }
-            // The version counter tells us cheaply whether anything changed; still do a
-            // full comparison now and then in case state was touched without a bump.
+            // Every state change and every played step bumps the version
+            // (`Engine::state()` is read-only), so an unchanged version means
+            // nothing to send.
             let version = self.engine.version();
-            if seen == Some(version) && skipped < FULL_CHECK_EVERY {
-                skipped += 1;
+            if seen == Some(version) {
                 continue;
             }
             seen = Some(version);
-            skipped = 0;
             self.broadcast(false);
         }
     }

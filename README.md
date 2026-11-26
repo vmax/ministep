@@ -297,14 +297,23 @@ The drum track sends plain MIDI notes, so any Drum Rack can play it. Melodic and
 ## Architecture
 
 ```text
-CoreMIDI input ──► Engine::handle_midi ──► encoder menu / profile knobs / learned commands / notes
-                         │                                   │
-   GUI, remote socket ───┤ (all &self, thread-safe)          ▼
-                         ▼                             AppState (Mutex)
-               real-time transport thread ──► Transport::poll ──► OwnedOutput ──► CoreMIDI
-                                                            ▲
-MiniLab OLED / pads ◄── EngineEvent channel ────────────────┘
+CoreMIDI input ─┐
+GUI ────────────┼─► Engine (edit / execute / handle_midi) ─► AppState (Mutex, editor's copy)
+remote socket ──┘                 │                                 │
+                                  │ messages: Start, Stop,          │ snapshot after every edit
+                                  ▼ Outputs, Snapshot  ◄────────────┘
+                     real-time transport thread (owns Transport + its own AppState copy)
+                                  │                        │
+                       playhead via atomics          MIDI ports / drum synth
+                                  ▼
+                     notifier thread ─► GUI repaint, remote broadcast, MiniLab display
 ```
+
+The transport thread never waits for a lock that the GUI, MIDI input or the
+socket can hold: it receives a copy of the state after every edit, publishes
+the playhead through atomics, and leaves notifications and memory frees to a
+helper thread. The only lock it touches is a MIDI port's, for the few
+microseconds of a send.
 
 The Cargo workspace:
 
