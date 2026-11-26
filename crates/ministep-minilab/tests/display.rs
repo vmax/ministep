@@ -1,4 +1,4 @@
-//! Ported from legacy/tests/test_minilab3_display*.py. Reference bytes were
+//! Ported from the Python build's tests/test_minilab3_display*.py. Reference bytes were
 //! printed by the Python `MiniLab3Display` (mido `Message.bytes()`).
 
 use ministep_core::engine::{EngineEvent, display_command};

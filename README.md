@@ -39,7 +39,7 @@ MIDI keyboard / MiniLab 3
 
 > A short demo belongs here: slowly enter notes, watch the MiniLab feedback and the window update, then press PLAY.
 
-MiniStep is written in Rust with a native egui window in a hardware style: transport bar, track list, a 16-step grid with a velocity lane, and a synth panel of knobs that send MIDI CC. The original Python/Textual build lives in `legacy/` until the Rust build has been used on real hardware for a while.
+MiniStep is written in Rust with a native egui window in a hardware style: transport bar, track list, a 16-step grid with a velocity lane, and a synth panel of knobs that send MIDI CC. It replaced the original Python/Textual build, which is in git history up to commit `09e2717`.
 
 ## What it does
 

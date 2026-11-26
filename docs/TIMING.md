@@ -1,5 +1,11 @@
 # MiniStep transport timing model
 
+> The sections up to "Rust build" describe the original Python build and the
+> measurements made with it. That code (`ministep/*.py`, `tools/timing_bench.py`,
+> `tests/test_timing.py`) was removed after the Rust rewrite; it is in git
+> history up to commit `09e2717`. The grid model and late policy carried over
+> unchanged to `crates/ministep-core`.
+
 This note describes how playback timing works, what was wrong before, and how
 to measure it. Read it before touching `ministep/clock.py` or
 `Sequencer.advance_one`.

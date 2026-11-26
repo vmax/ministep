@@ -1,6 +1,6 @@
 //! Parity with the Python build: named pattern store and engine pattern wiring.
-//! Ported from legacy/tests/test_patterns.py (names, store, legacy files, runtime)
-//! and the persistence/runtime parts of legacy/tests/test_drums.py.
+//! Ported from the Python build's tests/test_patterns.py (names, store, legacy files, runtime)
+//! and the persistence/runtime parts of the Python build's tests/test_drums.py.
 
 mod common;
 

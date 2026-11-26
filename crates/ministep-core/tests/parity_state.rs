@@ -1,5 +1,5 @@
 //! Parity with the Python build: `AppState`, `DrumTrack`, and snapshot (de)serialisation.
-//! Ported from legacy/tests/test_state.py, test_persistence.py, test_patterns.py
+//! Ported from the Python build's tests/test_state.py, test_persistence.py, test_patterns.py
 //! (serialisation section) and test_drums.py (model and persistence sections).
 
 use ministep_core::drums::{DRUM_STEPS, DrumStep, DrumTrack};

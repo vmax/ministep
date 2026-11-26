@@ -1,5 +1,5 @@
 //! Parity with the Python build: playback, drum dispatch, anchored grid, timing stats.
-//! Ported from legacy/tests/test_sequencer.py, test_drums.py (playback section),
+//! Ported from the Python build's tests/test_sequencer.py, test_drums.py (playback section),
 //! test_timing.py and test_clock.py.
 //!
 //! Python drove `Sequencer.advance_one()` against a fake clock; here the poll-driven

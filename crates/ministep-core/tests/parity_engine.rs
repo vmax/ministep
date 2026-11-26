@@ -1,6 +1,6 @@
 //! Parity with the Python build: the runtime (Rust `Engine`) — record mode, MIDI learn,
 //! controller mappings, main-encoder menu, synth profiles, drum audition over MIDI.
-//! Ported from legacy/tests/test_record_mode.py, test_midi_learn.py, test_controller.py,
+//! Ported from the Python build's tests/test_record_mode.py, test_midi_learn.py, test_controller.py,
 //! test_main_encoder_menu.py, test_profiles.py, test_clock.py, test_minilab_mapping.py
 //! and the MIDI/runtime sections of test_drums.py.
 
