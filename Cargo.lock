@@ -2173,6 +2173,13 @@ version = "0.2.0"
 [[package]]
 name = "ministep-remote"
 version = "0.2.0"
+dependencies = [
+ "ministep-core",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "miniz_oxide"

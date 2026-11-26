@@ -1,7 +1,15 @@
 [package]
 name = "ministep-remote"
+description = "MiniStep remote control: newline-delimited JSON over a Unix socket"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ministep-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
