@@ -161,7 +161,7 @@ fn run(args: Args) -> Result<(), String> {
         viewport: egui::ViewportBuilder::default()
             .with_title("MiniStep")
             .with_inner_size([1680.0, 960.0])
-            .with_min_inner_size([1280.0, 820.0])
+            .with_min_inner_size(app::MIN_WINDOW)
             .with_fullsize_content_view(true)
             .with_title_shown(false)
             .with_titlebar_shown(false),
